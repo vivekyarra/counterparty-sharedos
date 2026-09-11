@@ -7,7 +7,7 @@ This runbook is intentionally designed around the event's **no-human-in-the-loop
 - Deploy Counterparty core behind the SharedOS host/Cloud boundary.
 - Set a cryptographically random `COUNTERPARTY_INTERNAL_TOKEN` in both private components.
 - Configure durable SharedOS grant, bounded-use, namespace, delegation, and audit stores.
-- Set final `counterparty/router`, `counterparty/probe`, `counterparty/judge`, and `counterparty/attestor` addresses.
+- Set final `counterparty-router`, `counterparty-probe`, `counterparty-judge`, and `counterparty-attestor` addresses.
 - Verify real product turns appear in SharedOS audit.
 - Register/discover the three services on SharedNet with their final prices.
 - Confirm `/health` and an end-to-end paid/callable service round trip.
@@ -39,7 +39,8 @@ The representative agent must independently satisfy the hackathon spend requirem
 
 ## Failure behavior
 
-- **Missing authority:** terminate with SharedOS escalation / `INCONCLUSIVE`; do not widen authority.
+- **Missing authority + escalation grant present:** terminate through SharedOS escalation. The current turn receives no new authority while the request is pending.
+- **Missing authority + no escalation grant:** return `INCONCLUSIVE`; never widen authority or invent a successful result.
 - **Target unavailable:** `INCONCLUSIVE`, no positive reputation update.
 - **Backend storage unavailable:** fail closed; no in-memory fallback for authoritative reputation.
 - **Grant usage store unavailable:** SharedOS denial is correct; do not switch to unbounded grants.
