@@ -17,7 +17,7 @@ class StrictModel(BaseModel):
 
 
 class EvidenceState(str, Enum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 -- protocol state label, not a credential
     FAIL = "FAIL"
     INCONCLUSIVE = "INCONCLUSIVE"
 
