@@ -1,0 +1,22 @@
+{
+  "audit_chain_valid": true,
+  "audit_events": 7601,
+  "concurrency": 128,
+  "http_non_200": 0,
+  "latency_ms": {
+    "max": 5292.463,
+    "mean": 422.189,
+    "p50": 300.121,
+    "p95": 1039.983,
+    "p99": 2030.892
+  },
+  "replay_storm": {
+    "attempts": 100,
+    "observations": 1,
+    "passed": true,
+    "reputation_updates": 1
+  },
+  "requests": 7500,
+  "requests_per_second": 298.67,
+  "wall_seconds": 25.111
+}

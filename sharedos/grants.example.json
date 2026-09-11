@@ -1,0 +1,39 @@
+{
+  "purpose": "counterparty.verify-and-route-sharednet-services",
+  "agents": {
+    "router": "counterparty/router",
+    "probe": "counterparty/probe",
+    "judge": "counterparty/judge",
+    "attestor": "counterparty/attestor"
+  },
+  "grants": [
+    {
+      "subject": "counterparty/router",
+      "resource": "counterparty/services/trust_snapshot",
+      "action": "invoke",
+      "maxUses": 1,
+      "note": "Decision agent can read one trust snapshot; it cannot call target agents."
+    },
+    {
+      "subject": "counterparty/probe",
+      "resource": "sharednet/service/<target>",
+      "action": "invoke",
+      "maxUses": 3,
+      "note": "Target scoped at runtime; no signing, score mutation, or arbitrary tools."
+    },
+    {
+      "subject": "counterparty/judge",
+      "resource": "files/Counterparty/evidence/<evaluation-id>",
+      "action": "read",
+      "maxUses": 8,
+      "note": "Evidence only; no target invocation."
+    },
+    {
+      "subject": "counterparty/attestor",
+      "resource": "counterparty/attestations/<evaluation-id>",
+      "action": "create",
+      "maxUses": 1,
+      "note": "Can attest final evidence; cannot probe or alter observations."
+    }
+  ]
+}
