@@ -72,7 +72,10 @@ function kernel(grants: CapabilityGrant[]) {
     grantSource: {
       async load(ctx) {
         return grants.filter(
-          (g) => g.namespaceId === ctx.namespaceId && JSON.stringify(g.subject) === JSON.stringify(ctx.actor) && JSON.stringify(g.issuer) === JSON.stringify(ctx.authority),
+          (g) =>
+            g.namespaceId === ctx.namespaceId &&
+            JSON.stringify(g.subject) === JSON.stringify(ctx.actor) &&
+            JSON.stringify(g.issuer) === JSON.stringify(ctx.authority),
         );
       },
     },
@@ -157,6 +160,8 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
     actor: router,
     traceId: crypto.randomUUID(),
   };
+  const preflight = await k.admitTurn(ctx, router);
+  assert.equal(preflight.allowed, true, `preflight admission failed: ${JSON.stringify(preflight)}`);
   const tools = await k.listTools(ctx);
   const result = await turns.execute({
     version: "1",
@@ -175,7 +180,7 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
       createdAt: new Date().toISOString(),
     },
   });
-  assert.equal(result.status, "succeeded");
+  assert.equal(result.status, "succeeded", `turn result: ${JSON.stringify(result)}`);
 });
 
 test("verify_delivery strips caller-supplied evidence fields and fails closed without host evidence", async () => {
