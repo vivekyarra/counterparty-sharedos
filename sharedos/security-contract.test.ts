@@ -163,7 +163,7 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
     executionId: crypto.randomUUID(),
     agent: router,
     context: ctx,
-    tools,
+    tools: [...tools],
     message: {
       version: "1",
       id: crypto.randomUUID(),
