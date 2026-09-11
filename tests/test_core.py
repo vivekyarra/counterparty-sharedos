@@ -5,7 +5,12 @@ from counterparty.models import Assertion, CandidateScore, EvidenceState
 from counterparty.reputation import BayesianReputation
 from counterparty.routing import rank
 from counterparty.storage import CounterpartyStore
-from counterparty.verification import aggregate, assertions_probe, injection_probe, schema_probe
+from counterparty.verification import (
+    aggregate,
+    assertions_probe,
+    injection_probe,
+    schema_probe,
+)
 
 
 def test_sparse_reputation_shrinks_to_neutral():
