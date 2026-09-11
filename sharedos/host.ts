@@ -11,6 +11,7 @@ import {
   SharedOSExecutor,
   SharedOSKernel,
   StandardRuntime,
+  createEscalationTool,
   createKernelSharedOSApi,
   createSharedOSHandler,
   type AccessContext,
@@ -57,6 +58,9 @@ export function createCounterpartySharedOSHost(deps: CounterpartySharedOSHostDep
   for (const tool of counterpartyTools(deps.backend)) {
     kernel.registerTool(tool);
   }
+  // Registration grants nothing. The affordance is visible only when the
+  // caller enables the SharedOS namespace and holds a separate escalation grant.
+  kernel.registerTool(createEscalationTool());
 
   const runtime = new StandardRuntime(new CounterpartyRouterDriver(), {
     ...(deps.onTurnError === undefined ? {} : { onTurnError: deps.onTurnError }),
