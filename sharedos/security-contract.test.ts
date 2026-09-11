@@ -2,13 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { counterpartyTools } from "./tools.js";
+import {
+  COUNTERPARTY_ATTESTOR,
+  COUNTERPARTY_JUDGE,
+  COUNTERPARTY_PROBE,
+  COUNTERPARTY_ROUTER,
+  attestorReceiptGrant,
+  escalationGrant,
+  judgeEvidenceGrant,
+  probeTargetGrant,
+  routerExecutionGrant,
+  routerServiceGrant,
+} from "./grants.js";
 
 import {
   CapabilityAuthorizer,
-  agentExecutionCapability,
+  createEscalationTool,
   InMemoryGrantUsageStore,
   SharedOSKernel,
   type AccessContext,
+  type Address,
   type CapabilityGrant,
   type JsonObject,
   type ToolHandler,
@@ -17,7 +30,9 @@ import {
 const OWNER = { kind: "human", userId: "owner" } as const;
 const BUYER = { kind: "agent", agentId: "buyer" } as const;
 const PURPOSE = "counterparty.verify-and-route-sharednet-services";
+const NAMESPACE = "counterparty-arena";
 const RESOURCE = { namespace: "counterparty", path: ["services", "trust_snapshot"], owner: OWNER };
+const TARGET_RESOURCE = { namespace: "sharednet", path: ["services", "target-a"], owner: OWNER };
 
 const handler: ToolHandler = {
   definition: {
@@ -42,9 +57,32 @@ const handler: ToolHandler = {
   },
 };
 
+const targetHandler: ToolHandler = {
+  definition: {
+    name: "sharednet.target_invoke",
+    description: "bounded target service used to prove probe-role isolation",
+    namespace: "sharednet",
+    source: "native",
+    readWrite: "write",
+    inputSchema: { type: "object" },
+    requiredCapability: { resource: TARGET_RESOURCE, action: "invoke" },
+    annotations: { readOnly: false },
+  },
+  parseArguments: (value) => value,
+  async invoke(_context, call) {
+    return {
+      callId: call.id,
+      tool: call.tool,
+      status: "succeeded",
+      output: { target: "target-a", ok: true },
+      completedAt: new Date().toISOString(),
+    };
+  },
+};
+
 function access(purpose = PURPOSE): AccessContext {
   return {
-    namespaceId: "counterparty-arena",
+    namespaceId: NAMESPACE,
     actor: BUYER,
     authority: OWNER,
     owner: OWNER,
@@ -55,10 +93,23 @@ function access(purpose = PURPOSE): AccessContext {
   };
 }
 
+function roleAccess(actor: Address, enabledToolNamespaces: string[]): AccessContext {
+  return {
+    namespaceId: NAMESPACE,
+    actor,
+    authority: OWNER,
+    owner: OWNER,
+    purpose: PURPOSE,
+    traceId: crypto.randomUUID(),
+    enabledToolNamespaces,
+    now: new Date().toISOString(),
+  };
+}
+
 function grant(maxUses = 1): CapabilityGrant {
   return {
     id: "grant-buyer-trust",
-    namespaceId: "counterparty-arena",
+    namespaceId: NAMESPACE,
     subject: BUYER,
     issuer: OWNER,
     capabilities: [{ resource: RESOURCE, actions: ["invoke"], scope: "exact" }],
@@ -82,6 +133,8 @@ function kernel(grants: CapabilityGrant[]) {
     authorizer: new CapabilityAuthorizer({ usageStore: new InMemoryGrantUsageStore() }),
   });
   k.registerTool(handler);
+  k.registerTool(targetHandler);
+  k.registerTool(createEscalationTool());
   return k;
 }
 
@@ -90,6 +143,16 @@ function call(ctx: AccessContext) {
     id: crypto.randomUUID(),
     tool: "counterparty.trust_snapshot",
     arguments: { service_id: "target" },
+    traceId: ctx.traceId,
+    requestedAt: new Date().toISOString(),
+  };
+}
+
+function targetCall(ctx: AccessContext) {
+  return {
+    id: crypto.randomUUID(),
+    tool: "sharednet.target_invoke",
+    arguments: { task: "safe bounded probe" },
     traceId: ctx.traceId,
     requestedAt: new Date().toISOString(),
   };
@@ -125,29 +188,11 @@ test("maxUses is consumed atomically: one allowed invocation, then denial", asyn
   assert.equal(second.status, "denied");
 });
 
-test("Counterparty service can execute as a bounded SharedOS turn", async () => {
-  const router = { kind: "agent", agentId: "counterparty/router" } as const;
-  const owner = OWNER;
-  const serviceGrant: CapabilityGrant = {
-    id: "grant-router-service",
-    namespaceId: "counterparty-arena",
-    subject: router,
-    issuer: owner,
-    capabilities: [{ resource: RESOURCE, actions: ["invoke"], scope: "exact" }],
-    constraints: { purposes: [PURPOSE] },
-    issuedAt: new Date().toISOString(),
-  };
-  const executionGrant: CapabilityGrant = {
-    id: "grant-router-execution",
-    namespaceId: "counterparty-arena",
-    subject: router,
-    issuer: owner,
-    capabilities: [agentExecutionCapability(router, owner)],
-    constraints: { purposes: [PURPOSE] },
-    issuedAt: new Date().toISOString(),
-  };
-
-  const k = kernel([serviceGrant, executionGrant]);
+test("Counterparty service executes as a bounded SharedOS turn with path-safe agent identity", async () => {
+  const k = kernel([
+    routerServiceGrant(OWNER, NAMESPACE, "trust_snapshot"),
+    routerExecutionGrant(OWNER, NAMESPACE, "grant-router-execution"),
+  ]);
   const { SharedOSExecutor, StandardRuntime } = await import("@aicoo/sharedos");
   const { CounterpartyRouterDriver } = await import("./router-driver.js");
   const turns = new SharedOSExecutor(k, new StandardRuntime(new CounterpartyRouterDriver()), {
@@ -155,25 +200,19 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
     defaultMaxToolCalls: 2,
     defaultTimeoutMs: 5_000,
   });
-  const ctx: AccessContext = {
-    ...access(),
-    actor: router,
-    traceId: crypto.randomUUID(),
-  };
-  const preflight = await k.admitTurn(ctx, router);
-  assert.equal(preflight.allowed, true, `preflight admission failed: ${JSON.stringify(preflight)}`);
+  const ctx = roleAccess(COUNTERPARTY_ROUTER, ["counterparty"]);
   const tools = await k.listTools(ctx);
   const result = await turns.execute({
     version: "1",
     executionId: crypto.randomUUID(),
-    agent: router,
+    agent: COUNTERPARTY_ROUTER,
     context: ctx,
     tools: [...tools],
     message: {
       version: "1",
       id: crypto.randomUUID(),
       sender: BUYER,
-      receiver: router,
+      receiver: COUNTERPARTY_ROUTER,
       purpose: PURPOSE,
       payload: { service: "trust_snapshot", input: { service_id: "target" } },
       traceId: ctx.traceId,
@@ -181,6 +220,127 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
     },
   });
   assert.equal(result.status, "succeeded", `turn result: ${JSON.stringify(result)}`);
+});
+
+test("role grants enforce Router/Probe/Judge/Attestor separation", async () => {
+  const grants = [
+    routerServiceGrant(OWNER, NAMESPACE, "trust_snapshot"),
+    probeTargetGrant(OWNER, NAMESPACE, "target-a", 3),
+    judgeEvidenceGrant(OWNER, NAMESPACE, "eval-1"),
+    attestorReceiptGrant(OWNER, NAMESPACE, "eval-1"),
+  ];
+  const k = kernel(grants);
+
+  const routerCtx = roleAccess(COUNTERPARTY_ROUTER, ["sharednet"]);
+  assert.deepEqual(await k.listTools(routerCtx), []);
+  assert.equal((await k.invokeTool(routerCtx, targetCall(routerCtx))).status, "denied");
+
+  const probeCtx = roleAccess(COUNTERPARTY_PROBE, ["sharednet"]);
+  const probeTools = await k.listTools(probeCtx);
+  assert.deepEqual(probeTools.map((tool) => tool.name), ["sharednet.target_invoke"]);
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await k.invokeTool(probeCtx, targetCall(probeCtx))).status, "succeeded");
+  }
+  const exhausted = await k.invokeTool(probeCtx, targetCall(probeCtx));
+  assert.equal(exhausted.status, "denied");
+  if (exhausted.status === "denied") assert.equal(exhausted.error.code, "grant_exhausted");
+
+  const judgeCtx = roleAccess(COUNTERPARTY_JUDGE, ["sharednet"]);
+  assert.equal((await k.invokeTool(judgeCtx, targetCall(judgeCtx))).status, "denied");
+  const evidenceDecision = await k.authorize(judgeCtx, {
+    resource: {
+      namespace: "counterparty.evidence",
+      path: ["evaluations", "eval-1"],
+      owner: OWNER,
+    },
+    action: "read",
+  });
+  assert.equal(evidenceDecision.allowed, true);
+
+  const attestorCtx = roleAccess(COUNTERPARTY_ATTESTOR, ["sharednet"]);
+  assert.equal((await k.invokeTool(attestorCtx, targetCall(attestorCtx))).status, "denied");
+  const receiptDecision = await k.authorize(attestorCtx, {
+    resource: {
+      namespace: "counterparty.attestations",
+      path: ["evaluations", "eval-1"],
+      owner: OWNER,
+    },
+    action: "create",
+  });
+  assert.equal(receiptDecision.allowed, true);
+});
+
+test("missing service authority escalates only when SharedOS escalation is separately granted", async () => {
+  const k = kernel([
+    routerExecutionGrant(OWNER, NAMESPACE, "grant-router-execution-escalation"),
+    escalationGrant(COUNTERPARTY_ROUTER, OWNER, NAMESPACE),
+  ]);
+  const { SharedOSExecutor, StandardRuntime } = await import("@aicoo/sharedos");
+  const { CounterpartyRouterDriver } = await import("./router-driver.js");
+  const turns = new SharedOSExecutor(k, new StandardRuntime(new CounterpartyRouterDriver()), {
+    defaultMaxSteps: 4,
+    defaultMaxToolCalls: 2,
+    defaultTimeoutMs: 5_000,
+  });
+  const ctx = roleAccess(COUNTERPARTY_ROUTER, ["counterparty", "sharedos"]);
+  const tools = await k.listTools(ctx);
+  assert.deepEqual(tools.map((tool) => tool.name), ["sharedos.escalate"]);
+  const result = await turns.execute({
+    version: "1",
+    executionId: crypto.randomUUID(),
+    agent: COUNTERPARTY_ROUTER,
+    context: ctx,
+    tools: [...tools],
+    message: {
+      version: "1",
+      id: crypto.randomUUID(),
+      sender: BUYER,
+      receiver: COUNTERPARTY_ROUTER,
+      purpose: PURPOSE,
+      payload: { service: "trust_snapshot", input: { service_id: "target" } },
+      traceId: ctx.traceId,
+      createdAt: new Date().toISOString(),
+    },
+  });
+  assert.equal(result.status, "escalated", `turn result: ${JSON.stringify(result)}`);
+});
+
+test("without an escalation grant missing authority terminates INCONCLUSIVE, not escalated", async () => {
+  const k = kernel([routerExecutionGrant(OWNER, NAMESPACE, "grant-router-no-escalation")]);
+  const { SharedOSExecutor, StandardRuntime } = await import("@aicoo/sharedos");
+  const { CounterpartyRouterDriver } = await import("./router-driver.js");
+  const turns = new SharedOSExecutor(k, new StandardRuntime(new CounterpartyRouterDriver()), {
+    defaultMaxSteps: 4,
+    defaultMaxToolCalls: 2,
+    defaultTimeoutMs: 5_000,
+  });
+  const ctx = roleAccess(COUNTERPARTY_ROUTER, ["counterparty", "sharedos"]);
+  const tools = await k.listTools(ctx);
+  assert.deepEqual(tools, []);
+  const result = await turns.execute({
+    version: "1",
+    executionId: crypto.randomUUID(),
+    agent: COUNTERPARTY_ROUTER,
+    context: ctx,
+    tools: [],
+    message: {
+      version: "1",
+      id: crypto.randomUUID(),
+      sender: BUYER,
+      receiver: COUNTERPARTY_ROUTER,
+      purpose: PURPOSE,
+      payload: { service: "trust_snapshot", input: { service_id: "target" } },
+      traceId: ctx.traceId,
+      createdAt: new Date().toISOString(),
+    },
+  });
+  assert.equal(result.status, "succeeded");
+  if (result.status === "succeeded") {
+    assert.deepEqual(result.output, {
+      state: "INCONCLUSIVE",
+      reason: "Required service capability is not available in this turn.",
+    });
+  }
 });
 
 test("verify_delivery strips caller-supplied evidence fields and fails closed without host evidence", async () => {
