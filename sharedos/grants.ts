@@ -14,6 +14,19 @@ export const COUNTERPARTY_PROBE = { kind: "agent", agentId: "counterparty-probe"
 export const COUNTERPARTY_JUDGE = { kind: "agent", agentId: "counterparty-judge" } as const;
 export const COUNTERPARTY_ATTESTOR = { kind: "agent", agentId: "counterparty-attestor" } as const;
 
+function addressIdentifier(address: Address): string {
+  switch (address.kind) {
+    case "human":
+      return address.userId;
+    case "agent":
+      return address.agentId;
+    case "group":
+      return address.conversationId;
+    case "service":
+      return address.serviceId;
+  }
+}
+
 /** Execute exactly the Counterparty router for the product purpose. */
 export function routerExecutionGrant(
   owner: Address,
@@ -149,7 +162,7 @@ export function escalationGrant(
   namespaceId: string,
 ): CapabilityGrant {
   return {
-    id: `grant-escalation-${subject.kind}`,
+    id: `grant-escalation-${subject.kind}-${addressIdentifier(subject)}`,
     namespaceId,
     subject,
     issuer: owner,
@@ -160,7 +173,7 @@ export function escalationGrant(
         scope: "exact",
       },
     ],
-    constraints: { purposes: [COUNTERPARTY_PURPOSE], maxUses: 1 },
+    constraints: { purposes: [COUNTERPARTY_PURPOSE] },
     issuedAt: new Date().toISOString(),
   };
 }
