@@ -157,11 +157,13 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
     actor: router,
     traceId: crypto.randomUUID(),
   };
+  const tools = await k.listTools(ctx);
   const result = await turns.execute({
     version: "1",
     executionId: crypto.randomUUID(),
     agent: router,
     context: ctx,
+    tools,
     message: {
       version: "1",
       id: crypto.randomUUID(),
