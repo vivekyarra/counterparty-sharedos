@@ -1,0 +1,19 @@
+{
+  "name": "counterparty-sharedos-host",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test security-contract.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@aicoo/sharedos": "0.1.0-alpha.5"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "tsx": "4.20.5",
+    "@types/node": "22.15.3"
+  }
+}
