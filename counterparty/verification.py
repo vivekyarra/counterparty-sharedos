@@ -51,7 +51,7 @@ def schema_probe(output: Any, schema: dict[str, Any] | None) -> ProbeResult:
 def injection_probe(output: Any) -> ProbeResult:
     try:
         text = json.dumps(output, ensure_ascii=False, sort_keys=True, default=str).lower()
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         text = str(output).lower()
     hits = sorted({m for m in INJECTION_MARKERS if m in text})
     if hits:

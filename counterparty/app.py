@@ -10,10 +10,24 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from .models import BestExecutionRequest, CandidateScore, DeliveryVerificationRequest, EvidenceState, ProbeResult, TrustSnapshotRequest
+from .models import (
+    BestExecutionRequest,
+    CandidateScore,
+    DeliveryVerificationRequest,
+    EvidenceState,
+    ProbeResult,
+    TrustSnapshotRequest,
+)
 from .routing import rank
 from .storage import CounterpartyStore
-from .verification import aggregate, assertions_probe, citations_probe, contradiction_probe, injection_probe, schema_probe
+from .verification import (
+    aggregate,
+    assertions_probe,
+    citations_probe,
+    contradiction_probe,
+    injection_probe,
+    schema_probe,
+)
 
 PURPOSE = "counterparty.verify-and-route-sharednet-services"
 SERVICES = [
