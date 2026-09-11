@@ -241,9 +241,21 @@ test("role grants enforce Router/Probe/Judge/Attestor separation", async () => {
   for (let i = 0; i < 3; i += 1) {
     assert.equal((await k.invokeTool(probeCtx, targetCall(probeCtx))).status, "succeeded");
   }
+
+  // SharedOS deliberately hides exhausted grants from the caller-facing tool
+  // catalogue. An explicit authorization decision exposes the trusted internal
+  // reason (`grant_exhausted`), while a subsequent tool call returns the coarse
+  // privacy-preserving `tool_unavailable` error.
+  const exhaustedDecision = await k.authorize(probeCtx, {
+    resource: TARGET_RESOURCE,
+    action: "invoke",
+  });
+  assert.equal(exhaustedDecision.allowed, false);
+  if (!exhaustedDecision.allowed) assert.equal(exhaustedDecision.reasonCode, "grant_exhausted");
+
   const exhausted = await k.invokeTool(probeCtx, targetCall(probeCtx));
   assert.equal(exhausted.status, "denied");
-  if (exhausted.status === "denied") assert.equal(exhausted.error.code, "grant_exhausted");
+  if (exhausted.status === "denied") assert.equal(exhausted.error.code, "tool_unavailable");
 
   const judgeCtx = roleAccess(COUNTERPARTY_JUDGE, ["sharednet"]);
   assert.equal((await k.invokeTool(judgeCtx, targetCall(judgeCtx))).status, "denied");
