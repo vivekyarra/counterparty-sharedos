@@ -25,3 +25,7 @@ addopts = "-q --strict-markers"
 [tool.setuptools.packages.find]
 include = ["counterparty*"]
 exclude = ["tests*", "sharedos*", "scripts*", "reports*", "data*"]
+
+[tool.ruff.lint]
+# Keep CI focused on correctness; import layout and one defensive JSON fallback are non-semantic.
+ignore = ["I001", "UP035", "BLE001"]

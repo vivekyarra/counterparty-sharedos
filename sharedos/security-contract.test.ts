@@ -170,6 +170,7 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
       purpose: PURPOSE,
       payload: { service: "trust_snapshot", input: { service_id: "target" } },
       traceId: ctx.traceId,
+      createdAt: new Date().toISOString(),
     },
   });
   assert.equal(result.status, "succeeded");
