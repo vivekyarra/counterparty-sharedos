@@ -17,7 +17,7 @@ import {
 const OWNER = { kind: "human", userId: "owner" } as const;
 const BUYER = { kind: "agent", agentId: "buyer" } as const;
 const PURPOSE = "counterparty.verify-and-route-sharednet-services";
-const RESOURCE = { namespace: "counterparty", path: ["services", "trust_snapshot"], owner: OWNER } as const;
+const RESOURCE = { namespace: "counterparty", path: ["services", "trust_snapshot"], owner: OWNER };
 
 const handler: ToolHandler = {
   definition: {
@@ -170,7 +170,6 @@ test("Counterparty service can execute as a bounded SharedOS turn", async () => 
       purpose: PURPOSE,
       payload: { service: "trust_snapshot", input: { service_id: "target" } },
       traceId: ctx.traceId,
-      sentAt: new Date().toISOString(),
     },
   });
   assert.equal(result.status, "succeeded");
@@ -187,7 +186,7 @@ test("verify_delivery strips caller-supplied evidence fields and fails closed wi
     },
   });
   const verify = tools.find((tool) => tool.definition.name === "counterparty.verify_delivery");
-  assert.ok(verify);
+  if (verify === undefined) throw new Error("verify tool missing");
 
   const parsed = verify.parseArguments({
     delivery_id: "immutable-1",
@@ -210,6 +209,7 @@ test("verify_delivery strips caller-supplied evidence fields and fails closed wi
     new AbortController().signal,
   );
   assert.equal(result.status, "succeeded");
+  if (result.status !== "succeeded") throw new Error("verify tool did not succeed");
   assert.deepEqual(result.output, {
     state: "INCONCLUSIVE",
     reason: "No immutable host-owned evidence exists for this delivery ID.",
