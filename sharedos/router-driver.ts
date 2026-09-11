@@ -12,6 +12,7 @@ const SERVICE_TO_TOOL = {
   verify_delivery: "counterparty.verify_delivery",
   best_execution: "counterparty.best_execution",
 } as const;
+const ESCALATION_TOOL = "sharedos.escalate";
 
 type ServiceName = keyof typeof SERVICE_TO_TOOL;
 
@@ -26,8 +27,9 @@ function asObject(value: JsonValue): JsonObject | undefined {
  *
  * Counterparty does not need an LLM to route paid service calls. This keeps the
  * paid path cheap, reproducible, and robust under Arena load while still running
- * as a bounded SharedOS turn. Semantic/probe agents can be added behind the same
- * boundary without changing the buyer contract.
+ * as a bounded SharedOS turn. If a required service capability is missing, the
+ * driver escalates only when the separately granted SharedOS escalation
+ * affordance is actually present; otherwise it fails closed as INCONCLUSIVE.
  */
 export class CounterpartyRouterDriver implements AgentTurnDriver {
   async open(request: AgentTurnRequest) {
@@ -41,6 +43,7 @@ export class CounterpartyRouterDriver implements AgentTurnDriver {
         : undefined;
     const toolName = serviceName === undefined ? undefined : SERVICE_TO_TOOL[serviceName];
     const toolAvailable = toolName !== undefined && request.tools.some((tool) => tool.name === toolName);
+    const escalationAvailable = request.tools.some((tool) => tool.name === ESCALATION_TOOL);
     let called = false;
 
     return {
@@ -57,6 +60,13 @@ export class CounterpartyRouterDriver implements AgentTurnDriver {
             };
           }
           if (!toolAvailable) {
+            if (escalationAvailable) {
+              return {
+                type: "escalate",
+                reason: `Counterparty requires separately granted authority for ${toolName}.`,
+                metadata: { requested_tool: toolName },
+              };
+            }
             return {
               type: "complete",
               output: {
