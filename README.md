@@ -6,7 +6,7 @@ Counterparty is the **trust, verification, and best-execution layer for SharedNe
 
 The product is deliberately narrow: exactly three paid services, one SharedOS purpose string, bounded role-specific authority, replay-safe evidence, and a real SharedNet Room provider loop.
 
-## 30-second judge story
+## The 30-second judge story
 
 ```text
 UNKNOWN SELLER
@@ -32,15 +32,15 @@ BEST EXECUTION — 10 credits
      └──────────── routes the next credit with stronger evidence
 ```
 
-Counterparty does not pretend a canary proves task quality. Protocol evidence and real-delivery evidence remain separate.
+A canary never masquerades as task history. Protocol evidence and verified delivery evidence remain separate.
 
 ## Arena services
 
-| Service | Price | What the buyer gets |
+| Service | Price | Why another agent buys it |
 |---|---:|---|
-| `trust_snapshot` | **4 credits** | Fresh pre-purchase evidence. Returns `BUY / TRY_SMALL / CAUTION / UNPROVEN / AVOID`, evidence tier, confidence, protocol evidence, and audit receipt. |
-| `verify_delivery` | **7 credits** | Independent post-purchase verification. Returns `PASS / FAIL / INCONCLUSIVE`, evidence details, replay status, reputation-update status, and audit receipt. |
-| `best_execution` | **10 credits** | Ranked providers under a credit budget, preferring VERIFIED task evidence and discounting PROVISIONAL canary evidence. |
+| `trust_snapshot` | **4 credits** | Fresh proof before spend. Returns `BUY / TRY_SMALL / CAUTION / UNPROVEN / AVOID`, evidence tier, confidence, protocol evidence, and audit receipt. |
+| `verify_delivery` | **7 credits** | Independent proof after spend. Returns `PASS / FAIL / INCONCLUSIVE`, evidence details, replay status, reputation-update status, and audit receipt. |
+| `best_execution` | **10 credits** | Ranks providers under a budget, preferring VERIFIED task evidence and explicitly discounting PROVISIONAL canary evidence. |
 
 The commercial loop is:
 
@@ -48,9 +48,9 @@ The commercial loop is:
 
 ## How another agent calls Counterparty on SharedNet
 
-Organizer guidance clarified that Arena discovery is **Room-based**, not a global service registry, and calls are **messages**, not RPCs.
+Arena discovery is **Room-based**, not a global service registry, and calls are **messages**, not RPCs.
 
-Counterparty joins the Arena Room with a public SharedNet seat (`i_...`). Other agents discover that seat from the Room roster or the published seat ID, then send a request message such as:
+Counterparty joins the Arena Room with a public SharedNet Instance/seat (`i_...`). Other agents discover the seat in the Room roster or from the published seat ID, then send a request message such as:
 
 ```json
 {
@@ -80,15 +80,26 @@ The watcher passes JSON on stdin as:
 }
 ```
 
-For a paid request, Counterparty returns the fixed price and the configured SharedNet payee address. The buyer pays through SharedNet with the request ID in the memo. Counterparty verifies the payment from SharedNet ledger evidence before executing the paid SharedOS Router turn; buyer-authored text saying “paid” is never accepted as proof.
+For a paid request, Counterparty returns the fixed price, payee address, and memo. The buyer pays through SharedNet and then includes the resulting `txn_...` ID in the request. Counterparty verifies the native ledger before running the paid SharedOS turn.
 
-SharedNet address classes are intentionally kept distinct:
+Payment acceptance is deliberately strict. The ledger transfer must match:
+
+- transaction ID;
+- **the same SharedNet seat that sent the service request** (`by_instance_id`);
+- configured payee;
+- exact fixed service price;
+- current Room;
+- request ID and service in the memo.
+
+The transaction is then durably bound to one request/fingerprint. A buyer-authored “paid” message, copied transaction ID, or another buyer's visible Room receipt cannot authorize delivery.
+
+SharedNet address classes remain distinct:
 
 - `i_...` — live Instance/seat; this is what another agent calls.
-- `a_...` — agent/tag address.
-- `p_...` — principal/account address; suitable for payment.
+- `a_...` — Agent/tag address.
+- `p_...` — Principal/account address.
 
-All three can be payment targets when SharedNet allows it, but they are not treated as interchangeable identities inside Counterparty.
+SharedNet can route payments to supported address classes, but Counterparty never confuses payment identity with the exact seller seat used for an active canary.
 
 ## SharedOS is load-bearing
 
@@ -115,14 +126,16 @@ Counterparty Probe
 Target SharedNet seat
 ```
 
-Roles:
+The actual SharedOS audit identities are fixed and path-safe:
 
 ```text
-counterparty-router     decision/product-service authority; no seller-call authority
-counterparty-probe      bounded exact-target seller-call authority only
-counterparty-judge      sealed-evidence authority; no seller calls
-counterparty-attestor   receipt authority only; no seller calls
+counterparty-router
+counterparty-probe
+counterparty-judge
+counterparty-attestor
 ```
+
+They are not repository placeholders. These are the `Address.agentId` values used by the runtime and the identities judges should use when locating product turns in the audit trail.
 
 Purpose string:
 
@@ -130,14 +143,14 @@ Purpose string:
 counterparty.verify-and-route-sharednet-services
 ```
 
-The Router generates the canary nonce and asks only the Probe. The Probe is the only role allowed to contact the target seller. For Arena transport, the target service identifier is mapped to the seller's exact SharedNet `i_...` seat. Canary replies are accepted only from that seat.
+The Router generates the canary nonce and asks only the Probe. Probe is the only role allowed to contact the target seller. For Arena transport, the target identifier is the seller's exact SharedNet `i_...` seat. Canary replies are accepted only from that seat.
 
 ## Evidence semantics
 
 Counterparty stores two evidence classes separately:
 
-- **Protocol canary evidence**: proves a seller answered a bounded current challenge correctly. It can produce `PROVISIONAL` evidence and justify a small first purchase.
-- **Verified delivery evidence**: proves an actual buyer delivery satisfied its host-owned task contract. It produces the stronger `VERIFIED` task reputation.
+- **Protocol canary evidence** proves a seller answered a current bounded challenge correctly. It can create `PROVISIONAL` evidence and justify a small first purchase.
+- **Verified delivery evidence** proves an actual buyer delivery satisfied its trusted task contract. It produces the stronger `VERIFIED` task reputation.
 
 Trust invariants:
 
@@ -149,20 +162,22 @@ Trust invariants:
 - Verification/reputation/audit writes are transactional.
 - SharedOS authorization is deny-by-default and bounded grants use atomic `maxUses` consumption.
 - Escalation is separately granted and never silently widens authority.
-- The private FastAPI core is not the public SharedNet surface.
+- The private FastAPI core is not the public SharedNet service surface.
 
 ## Live Arena provider implementation
 
-The merged Arena release includes the real provider boundary, not just an API demo:
+The merged Arena release contains the real provider boundary, not only an API demo:
 
 - `sharedos/arena-service.ts` — paid SharedNet request → SharedOS Router turn orchestration.
-- `sharedos/sharednet-cli.ts` — SharedNet CLI transport, sender-scoped canary polling, and ledger access.
+- `sharedos/sharednet-cli.ts` — SharedNet CLI transport, exact-sender canary polling, and ledger verification.
 - `sharedos/arena-store.ts` — durable SharedOS grant usage/audit plus replay-safe payment/request binding.
-- `sharedos/arena-service.test.ts` — service-loop and payment-boundary tests.
+- `sharedos/arena-service.test.ts` — service-loop/payment-boundary tests.
+- `sharedos/sharednet-cli.test.ts` — buyer-seat-bound ledger verification tests.
 - `scripts/arena_host.py` — cross-platform launcher for the private backend and SharedNet watcher.
+- `tests/test_arena_host.py` — locks the current supported SharedNet launcher syntax.
 - `docs/SHAREDNET_ARENA.md` — organizer-confirmed Room/message/payment model.
 
-The active canary polling path uses sender-filtered SharedNet reads instead of consuming the parent watcher cursor, so a nested Probe cannot steal unrelated Arena messages from the provider loop.
+Active canary polling uses sender-filtered SharedNet reads rather than consuming the provider watch cursor, so nested probing cannot steal unrelated Arena messages from the parent service loop.
 
 ## Engineering evidence
 
@@ -217,9 +232,19 @@ X-Counterparty-Internal-Token: $COUNTERPARTY_INTERNAL_TOKEN
 
 ## Arena launch
 
-The organizer's QA Room is for connectivity testing. The competition Room link is supplied separately near Arena start and must not be hard-coded.
+The organizer's QA Room is for connectivity testing. The competition Room is supplied separately near Arena start and must not be hard-coded.
 
-The final Arena host is launched from a SharedNet-authenticated machine with the real seat and account/payment identity. `scripts/arena_host.py` verifies the local SharedNet identity, exposes the seat for reachability, starts the private backend, and runs the official watcher loop.
+From a SharedNet-authenticated checkout after joining the current Room:
+
+```bash
+python scripts/arena_host.py
+```
+
+The launcher verifies the selected account/seat, sets the real seat/node environment, makes the seat public with the currently supported `sharednet reach public` syntax, starts the private backend, and runs the official watcher loop. For bounded QA testing only:
+
+```bash
+python scripts/arena_host.py --max-runs 5
+```
 
 Exact operational details live in:
 
@@ -237,18 +262,18 @@ Code readiness is not enough for hackathon eligibility:
 python scripts/arena_preflight.py --live
 ```
 
-The current preflight refuses `READY=true` unless the deployment has the facts that actually matter for the organizer-confirmed Arena model:
+The current preflight refuses `READY=true` unless these real deployment facts exist:
 
-- a private internal backend token;
-- the representative agent's real SharedNet node/seat ID;
-- a real SharedNet payee address;
-- non-placeholder Router / Probe / Judge / Attestor product-agent addresses;
-- explicit confirmation that real Counterparty turns are visible in the SharedOS Cloud audit;
+- private internal backend token;
+- representative agent's real SharedNet `i_...` node/seat ID;
+- real SharedNet payee address;
+- canonical SharedOS role identities exactly matching the runtime;
+- explicit confirmation that real Counterparty turns are visible in SharedOS Cloud audit;
 - explicit confirmation that another SharedNet seat called Counterparty and received a reply.
 
-A public HTTPS URL is **optional** because SharedNet invocation is message-based. When a URL is configured, preflight validates it strictly, including `/health`, `/.well-known/agent.json`, the exact purpose string, product-agent addresses, seat ID, and payee address.
+A public HTTPS URL is **optional** because SharedNet invocation is message-based. When configured, preflight validates it strictly, including `/health`, `/.well-known/agent.json`, the exact purpose string, and canonical role identities.
 
-A SharedOS tenant ID or owner-address environment variable is **not** a Counterparty preflight requirement. The latest organizer guidance says participants should use the current SharedOS model rather than wait for tenant provisioning. This does **not** remove the Devpost requirement that judges must be able to find real product turns in the SharedOS Cloud audit trail.
+A SharedOS tenant ID or separately invented “production” role ID is **not** a Counterparty preflight requirement. Current SharedOS documentation says the application runs the kernel and Cloud separately receives decision events the application sends. This does **not** remove the hackathon requirement that judges be able to find real Counterparty turns in the SharedOS Cloud audit trail.
 
 ## Arena autonomous loop
 
@@ -256,7 +281,7 @@ A SharedOS tenant ID or owner-address environment variable is **not** a Counterp
 
 1. Join the Arena Room and read its roster.
 2. Try at least three other products with concrete tasks.
-3. Record a specific disagreement/critique for each product tried.
+3. Record one specific disagreement/critique for each product tried.
 4. Use Trust Snapshot on relevant unfamiliar sellers so cold-start evidence exists before Round 2.
 5. Submit the required ranking.
 
@@ -266,22 +291,22 @@ A SharedOS tenant ID or owner-address environment variable is **not** a Counterp
 2. Offer the 4-credit Trust Snapshot as the low-friction pre-spend purchase.
 3. Use Safe Best Execution to route small initial spends from provisional evidence.
 4. Verify real deliveries so sellers can graduate to VERIFIED evidence.
-5. Spend the required Arena credits across the required number of other products with the representative personal agent.
+5. Spend the event-required Arena credits across the required number of other products with the representative personal agent.
 
 The representative agent must operate without a human in the loop during the Arena.
 
 ## Release boundary
 
-The **product implementation, SharedOS authority model, payment boundary, SharedNet provider loop, cold-start flywheel, and hardening tests are complete in this repository**.
+The **product implementation, SharedOS authority model, buyer-seat-bound payment boundary, SharedNet provider loop, cold-start flywheel, and hardening tests are complete in this repository**.
 
-The remaining eligibility facts are external and must be real, not fabricated:
+The four product-agent audit identities are already fixed and submission-ready. The remaining eligibility facts are external and must be real, not fabricated:
 
-- authenticated SharedNet account and live `i_...` seat;
+- authenticated SharedNet account and live `i_...` seat/node;
 - real payee address;
 - competition Room membership;
 - real Counterparty product turns visible in SharedOS Cloud audit;
-- one external SharedNet call proving another seat can buy and receive a Counterparty service;
-- final node/seat ID, product-agent addresses, and team-lead Discord username in the submission.
+- one external SharedNet purchase/call proving another seat can receive a Counterparty service;
+- real node/seat ID and team-lead Discord username in the final submission.
 
 `python scripts/arena_preflight.py --live` is the final stop/go gate.
 
