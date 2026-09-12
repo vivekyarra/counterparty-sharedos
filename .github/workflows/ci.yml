@@ -62,7 +62,7 @@ jobs:
       - run: python scripts/arena_demo.py --json
 
   stress:
-    name: Concurrent stress + replay storm
+    name: Concurrent stress + Arena hardening
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -73,6 +73,8 @@ jobs:
           cache: pip
       - run: pip install -e '.[dev]'
       - run: python scripts/stress_test.py --requests 1500 --concurrency 48
+      - run: python scripts/arena_rehearsal.py
+      - run: python scripts/arena_soak.py --events 2400 --concurrency 48 --virtual-seconds 7200 --restarts 7
 
   sharedos:
     name: SharedOS contract
