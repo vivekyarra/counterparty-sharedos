@@ -12,7 +12,6 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SHAREDOS_DIR = ROOT / "sharedos"
 SEAT_PREFIX = "i_"
 
 
@@ -33,7 +32,7 @@ def run_json(args: list[str], env: dict[str, str]) -> dict:
     )
     value = json.loads(completed.stdout)
     if not isinstance(value, dict):
-        raise RuntimeError(f"expected JSON object from {' '.join(args)}")
+        raise TypeError(f"expected JSON object from {' '.join(args)}")
     return value
 
 
@@ -90,9 +89,9 @@ def main() -> int:
     account = who.get("account")
     seat = who.get("seat")
     if not isinstance(account, dict):
-        raise RuntimeError("SharedNet is not logged in on this machine. Run `npx -y sharednet@latest login` first.")
+        raise TypeError("SharedNet is not logged in on this machine. Run `npx -y sharednet@latest login` first.")
     if not isinstance(seat, dict):
-        raise RuntimeError("This checkout is not seated in a SharedNet Room. Join the QA/Arena Room first.")
+        raise TypeError("This checkout is not seated in a SharedNet Room. Join the QA/Arena Room first.")
     member_id = str(seat.get("member_id") or "")
     room_id = str(seat.get("room_id") or "")
     if len(member_id) != 12 or not member_id.startswith(SEAT_PREFIX) or not member_id[2:].isalnum():
@@ -176,7 +175,7 @@ def main() -> int:
         ]
         if args.max_runs is not None:
             watch_args.extend(["--max-runs", str(args.max_runs)])
-        watch = subprocess.run(watch_args, cwd=ROOT, env=env)
+        watch = subprocess.run(watch_args, cwd=ROOT, env=env, check=False)
         return watch.returncode
     finally:
         stop_backend()
