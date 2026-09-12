@@ -91,7 +91,9 @@ def test_best_execution_safe_requires_evidence(tmp_path):
     }
     j = c.post("/v1/best-execution", json=payload).json()
     assert j["state"] == "INCONCLUSIVE"
-    assert "verified observations" in j["reason"]
+    assert "passing protocol canary" in j["reason"]
+    assert j["next_action"]["service"] == "trust_snapshot"
+    assert set(j["next_action"]["targets"]) == {"a", "b"}
 
 
 def test_best_execution_explore_can_rank_new_agents(tmp_path):

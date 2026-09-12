@@ -11,10 +11,12 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .models import (
+    Assertion,
     BestExecutionRequest,
     CandidateScore,
     DeliveryVerificationRequest,
     EvidenceState,
+    ProbeObservationRequest,
     ProbeResult,
     TrustSnapshotRequest,
 )
@@ -34,9 +36,9 @@ SERVICES = [
     {
         "name": "trust_snapshot",
         "price_credits": 4,
-        "description": "Server-owned, evidence-backed pre-purchase trust check for an agent service.",
-        "input": {"service_id": "string", "task_type": "string"},
-        "output": {"trust_score": "0-100", "confidence": "0-1", "verdict": "BUY|CAUTION|UNPROVEN|AVOID"},
+        "description": "Active pre-purchase trust check: under SharedOS, Counterparty canary-tests the seller with a bounded Probe turn, then combines fresh protocol proof with server-owned delivery reputation.",
+        "input": {"service_id": "SharedNet service ID", "task_type": "optional task class"},
+        "output": {"trust_score": "0-100", "confidence": "0-1", "verdict": "BUY|TRY_SMALL|CAUTION|UNPROVEN|AVOID", "fresh_probe": "SharedOS-host metadata when active probing runs"},
     },
     {
         "name": "verify_delivery",
@@ -48,9 +50,9 @@ SERVICES = [
     {
         "name": "best_execution",
         "price_credits": 10,
-        "description": "Rank candidate agent services by expected utility using Counterparty-owned reputation under a credit budget.",
+        "description": "Rank candidate agent services by expected utility using task evidence first and bounded protocol-canary evidence for safe cold-start routing.",
         "input": {"task": "string", "budget_credits": "int", "candidates": "[{service_id,price_credits,task_fit}]"},
-        "output": {"recommended": "service_id?", "ranked": "candidate scores", "state": "PASS|INCONCLUSIVE"},
+        "output": {"recommended": "service_id?", "ranked": "candidate scores", "evidence_tier": "VERIFIED|PROVISIONAL", "state": "PASS|INCONCLUSIVE"},
     },
 ]
 
@@ -67,8 +69,8 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
 
     app = FastAPI(
         title="Counterparty",
-        version="0.2.0",
-        description="Evidence-backed trust, verification, and best-execution layer for SharedNet agents",
+        version="0.3.0",
+        description="Active trust, verification, and best-execution layer for SharedNet agents",
     )
     app.state.store = store
 
@@ -96,13 +98,13 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
         # Public liveness must stay O(1); a hostile health-check flood must not
         # force a full historical hash-chain scan. Full verification is on the
         # trusted /v1/audit surface and in preflight/CI.
-        return {"ok": True, "service": "counterparty", "version": "0.2.0", "audit": store.audit_head()}
+        return {"ok": True, "service": "counterparty", "version": "0.3.0", "audit": store.audit_head()}
 
     @app.get("/.well-known/agent.json")
     def agent_card():
         return {
             "name": "Counterparty",
-            "description": "Before your agent spends a credit, Counterparty proves who can do the job.",
+            "description": "Before your agent spends a credit, Counterparty actively tests who can do the job, verifies what they deliver, and routes the next purchase with compounding evidence.",
             "purpose": PURPOSE,
             "agent_addresses": {
                 "router": os.getenv("COUNTERPARTY_ROUTER_ADDRESS", "counterparty-router"),
@@ -110,25 +112,54 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
                 "judge": os.getenv("COUNTERPARTY_JUDGE_ADDRESS", "counterparty-judge"),
                 "attestor": os.getenv("COUNTERPARTY_ATTESTOR_ADDRESS", "counterparty-attestor"),
             },
-            "capabilities": ["trust_snapshot", "verify_delivery", "best_execution"],
+            "capabilities": ["active_canary", "trust_snapshot", "verify_delivery", "best_execution"],
             "evidence_semantics": ["PASS", "FAIL", "INCONCLUSIVE"],
             "services": SERVICES,
+            "market_flywheel": [
+                "Trust Snapshot actively probes an unknown seller under a bounded SharedOS grant",
+                "A passing canary creates PROVISIONAL evidence and unlocks safe small-spend routing",
+                "Verify Delivery converts the purchase into task-specific VERIFIED reputation",
+                "Best Execution uses the stronger evidence to route the next credit",
+            ],
             "max_delivery_seconds": 300,
         }
 
     @app.post("/v1/trust-snapshot")
     def trust_snapshot(req: TrustSnapshotRequest):
         rep, median_latency = store.reputation(req.service_id, req.task_type)
+        protocol_rep, protocol_latency = store.protocol_reputation(req.service_id)
         score = rep.score_100()
         conservative = rep.conservative_score_100()
+
         if rep.observations == 0:
-            verdict = "UNPROVEN"
+            if protocol_rep.observations == 0:
+                verdict = "UNPROVEN"
+                action = "RUN_CANARY"
+            elif protocol_rep.failures > protocol_rep.successes:
+                verdict = "AVOID"
+                action = "SKIP"
+            else:
+                verdict = "TRY_SMALL"
+                action = "BUY_SMALL_THEN_VERIFY"
         elif score >= 75 and rep.confidence >= 0.5:
             verdict = "BUY"
+            action = "BUY"
         elif score >= 55:
             verdict = "CAUTION"
+            action = "BUY_SMALL_THEN_VERIFY"
         else:
             verdict = "AVOID"
+            action = "SKIP"
+
+        if rep.observations:
+            evidence_tier = "VERIFIED"
+        elif protocol_rep.observations and protocol_rep.failures > protocol_rep.successes:
+            evidence_tier = "REJECTED"
+        elif protocol_rep.observations:
+            evidence_tier = "PROVISIONAL"
+        else:
+            evidence_tier = "UNPROVEN"
+
         event = store.append_audit(
             "trust_snapshot",
             {
@@ -138,7 +169,10 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
                 "conservative_score": conservative,
                 "confidence": rep.confidence,
                 "observations": rep.observations,
+                "protocol_observations": protocol_rep.observations,
+                "evidence_tier": evidence_tier,
                 "verdict": verdict,
+                "action": action,
             },
         )
         return {
@@ -149,7 +183,84 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
             "confidence": round(rep.confidence, 4),
             "observations": rep.observations,
             "verdict": verdict,
+            "action": action,
+            "evidence_tier": evidence_tier,
             "evidence": {"successes": rep.successes, "failures": rep.failures, "median_latency_ms": median_latency},
+            "protocol_evidence": {
+                "successes": protocol_rep.successes,
+                "failures": protocol_rep.failures,
+                "observations": protocol_rep.observations,
+                "score": protocol_rep.score_100(),
+                "confidence": round(protocol_rep.confidence, 4),
+                "median_latency_ms": protocol_latency,
+            },
+            "audit_receipt": event["hash"],
+        }
+
+    @app.post("/v1/probe-observation")
+    def probe_observation(req: ProbeObservationRequest):
+        # The canary contract is server-owned. Buyers cannot choose an easy
+        # assertion or an impossible assertion to inflate/poison another agent.
+        expected_schema = {
+            "type": "object",
+            "properties": {
+                "counterparty_probe_id": {"const": req.nonce},
+                "ack": {"const": True},
+            },
+            "required": ["counterparty_probe_id", "ack"],
+        }
+        assertions = [
+            Assertion(path="/counterparty_probe_id", op="eq", value=req.nonce),
+            Assertion(path="/ack", op="eq", value=True),
+        ]
+        probes = [
+            schema_probe(req.output, expected_schema),
+            assertions_probe(req.output, assertions),
+            injection_probe(req.output),
+            contradiction_probe(req.output),
+        ]
+        state, score, confidence = aggregate(probes)
+        if state == EvidenceState.INCONCLUSIVE:
+            # With a server-owned schema and assertions, a returned reply is
+            # always decidable. Preserve fail-closed semantics if that invariant
+            # ever changes.
+            state = EvidenceState.FAIL
+
+        fingerprint_material = {
+            "probe_id": req.probe_id,
+            "provider_id": req.provider_id,
+            "nonce": req.nonce,
+            "output": req.output,
+        }
+        evidence_hash = hashlib.sha256(
+            json.dumps(fingerprint_material, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        event, updated = store.record_protocol_observation(
+            probe_id=req.probe_id,
+            service_id=req.provider_id,
+            outcome=state.value,
+            evidence_hash=evidence_hash,
+            latency_ms=req.latency_ms,
+            audit_payload={
+                "probe_id": req.probe_id,
+                "provider_id": req.provider_id,
+                "state": state.value,
+                "score": score,
+                "confidence": confidence,
+                "evidence_hash": evidence_hash,
+                "probe_states": {p.probe: p.state.value for p in probes},
+            },
+        )
+        return {
+            "provider_id": req.provider_id,
+            "probe_id": req.probe_id,
+            "state": state,
+            "score": score,
+            "confidence": confidence,
+            "probes": [p.model_dump(mode="json") for p in probes],
+            "protocol_reputation_updated": updated,
+            "replay_suppressed": not updated,
+            "evidence_hash": evidence_hash,
             "audit_receipt": event["hash"],
         }
 
@@ -226,42 +337,89 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
         candidate_scores: list[CandidateScore] = []
         for candidate in req.candidates:
             rep, observed_latency = store.reputation(candidate.service_id, req.task_type)
-            trust = rep.conservative_score_100() if req.mode == "safe" else rep.score_100()
+            protocol_rep, protocol_latency = store.protocol_reputation(candidate.service_id)
+            if rep.observations > 0:
+                trust = rep.conservative_score_100() if req.mode == "safe" else rep.score_100()
+                confidence = rep.confidence
+                evidence_tier = "VERIFIED"
+            elif protocol_rep.observations > 0:
+                # A returned failed canary is stronger than mere uncertainty: it
+                # is a deterministic negative signal. Keep it in the ranked
+                # evidence table, but never route spend to it. Passing/mixed
+                # non-negative canary history remains explicitly provisional.
+                trust = 50.0 + 0.5 * (protocol_rep.score_100() - 50.0)
+                confidence = min(0.5, 0.2 + 0.5 * protocol_rep.confidence)
+                evidence_tier = "REJECTED" if protocol_rep.failures > protocol_rep.successes else "PROVISIONAL"
+            else:
+                trust = 50.0
+                confidence = 0.0
+                evidence_tier = "UNPROVEN"
+
             candidate_scores.append(
                 CandidateScore(
                     service_id=candidate.service_id,
                     price_credits=candidate.price_credits,
                     trust_score=trust,
-                    confidence=rep.confidence,
+                    confidence=confidence,
                     task_fit=candidate.task_fit,
-                    latency_ms=candidate.latency_ms if candidate.latency_ms is not None else observed_latency or 1000,
+                    latency_ms=candidate.latency_ms if candidate.latency_ms is not None else observed_latency or protocol_latency or 1000,
                     observations=rep.observations,
+                    protocol_observations=protocol_rep.observations,
+                    evidence_tier=evidence_tier,
                 )
             )
+
         ranked = rank(candidate_scores, req.budget_credits, req.mode)
         viable = [(c, u) for c, u in ranked if u > -1e8]
-        evidence_ready = [x for x in viable if x[0].observations > 0]
+        routeable = [x for x in viable if x[0].evidence_tier != "REJECTED"]
+        evidence_ready = [x for x in routeable if x[0].evidence_tier in {"VERIFIED", "PROVISIONAL"}]
+
+        def row(c: CandidateScore, u: float) -> dict[str, object]:
+            return {
+                "service_id": c.service_id,
+                "utility": round(u, 4),
+                "price_credits": c.price_credits,
+                "trust_score": round(c.trust_score, 2),
+                "confidence": round(c.confidence, 4),
+                "evidence_tier": c.evidence_tier,
+                "verified_observations": c.observations,
+                "protocol_observations": c.protocol_observations,
+            }
+
         if not viable:
-            result = {"state": "INCONCLUSIVE", "reason": "No candidate fits the budget", "ranked": []}
+            result: dict[str, object] = {"state": "INCONCLUSIVE", "reason": "No candidate fits the budget", "ranked": []}
+        elif not routeable:
+            result = {
+                "state": "INCONCLUSIVE",
+                "reason": "Every in-budget candidate is rejected by deterministic active-canary evidence.",
+                "ranked": [row(c, u) for c, u in viable],
+            }
         elif req.mode == "safe" and not evidence_ready:
             result = {
                 "state": "INCONCLUSIVE",
-                "reason": "No in-budget candidate has verified observations; use explore mode to rank unproven services",
-                "ranked": [
-                    {"service_id": c.service_id, "utility": round(u, 4), "price_credits": c.price_credits, "trust_score": c.trust_score, "confidence": c.confidence, "observations": c.observations}
-                    for c, u in viable
-                ],
+                "reason": "No in-budget candidate has verified delivery evidence or a passing protocol canary.",
+                "ranked": [row(c, u) for c, u in viable],
+                "next_action": {
+                    "service": "trust_snapshot",
+                    "price_credits": 4,
+                    "reason": "Trust Snapshot actively canary-tests an unknown seller under a bounded SharedOS Probe grant.",
+                    "targets": [c.service_id for c, _ in routeable if c.evidence_tier == "UNPROVEN"][:5],
+                },
             }
         else:
-            winner = evidence_ready[0] if req.mode == "safe" else viable[0]
+            winner = evidence_ready[0] if req.mode == "safe" else routeable[0]
             result = {
                 "state": "PASS",
                 "recommended": winner[0].service_id,
                 "expected_utility": round(winner[1], 4),
-                "ranked": [
-                    {"service_id": c.service_id, "utility": round(u, 4), "price_credits": c.price_credits, "trust_score": c.trust_score, "confidence": c.confidence, "observations": c.observations}
-                    for c, u in viable
-                ],
+                "evidence_tier": winner[0].evidence_tier,
+                "recommendation_strength": "VERIFIED" if winner[0].evidence_tier == "VERIFIED" else "PROVISIONAL",
+                "ranked": [row(c, u) for c, u in viable],
+                "next_action": {
+                    "service": "verify_delivery",
+                    "price_credits": 7,
+                    "reason": "After purchase, verify the actual delivery to upgrade provisional protocol evidence into task-specific reputation.",
+                },
             }
         event = store.append_audit("best_execution", {"task_hash": hashlib.sha256(req.task.encode()).hexdigest(), "mode": req.mode, "result": result})
         result["audit_receipt"] = event["hash"]

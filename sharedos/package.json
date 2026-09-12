@@ -1,11 +1,11 @@
 {
   "name": "counterparty-sharedos-host",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test security-contract.test.ts",
+    "test": "tsx --test *.test.ts",
     "check": "npm run typecheck && npm test"
   },
   "dependencies": {

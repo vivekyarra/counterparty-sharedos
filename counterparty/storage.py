@@ -57,6 +57,19 @@ class CounterpartyStore:
                 CREATE INDEX IF NOT EXISTS idx_observations_service
                     ON observations(service_id, task_type, created_ns);
 
+                CREATE TABLE IF NOT EXISTS protocol_observations (
+                    id TEXT PRIMARY KEY,
+                    probe_id TEXT NOT NULL UNIQUE,
+                    service_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK(outcome IN ('PASS','FAIL')),
+                    latency_ms INTEGER NOT NULL,
+                    evidence_hash TEXT NOT NULL,
+                    created_ns INTEGER NOT NULL,
+                    UNIQUE(service_id, evidence_hash)
+                );
+                CREATE INDEX IF NOT EXISTS idx_protocol_observations_service
+                    ON protocol_observations(service_id, created_ns);
+
                 CREATE TABLE IF NOT EXISTS audit_events (
                     seq INTEGER PRIMARY KEY,
                     id TEXT NOT NULL UNIQUE,
@@ -141,6 +154,40 @@ class CounterpartyStore:
             payload["reputation_updated"] = updated
             payload["replay_suppressed"] = outcome in {"PASS", "FAIL"} and not updated
             event = self._append_audit_tx(con, "verify_delivery", payload)
+            return event, updated
+
+    def record_protocol_observation(
+        self,
+        probe_id: str,
+        service_id: str,
+        outcome: str,
+        evidence_hash: str,
+        latency_ms: int,
+        audit_payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically persist one trusted canary and its audit receipt.
+
+        Protocol canaries are deliberately stored separately from task-delivery
+        evidence. They can break marketplace cold start and support a provisional
+        routing decision, but they never masquerade as proof that a provider has
+        already succeeded on the buyer's domain-specific task.
+        """
+        if outcome not in {"PASS", "FAIL"}:
+            raise ValueError("protocol observations must be decisive PASS/FAIL outcomes")
+        with self.transaction() as con:
+            updated = False
+            try:
+                con.execute(
+                    "INSERT INTO protocol_observations(id,probe_id,service_id,outcome,latency_ms,evidence_hash,created_ns) VALUES(?,?,?,?,?,?,?)",
+                    (str(uuid.uuid4()), probe_id, service_id, outcome, latency_ms, evidence_hash, time.time_ns()),
+                )
+                updated = True
+            except sqlite3.IntegrityError:
+                updated = False
+            payload = dict(audit_payload)
+            payload["protocol_reputation_updated"] = updated
+            payload["replay_suppressed"] = not updated
+            event = self._append_audit_tx(con, "protocol_probe", payload)
             return event, updated
 
     def verify_audit(self) -> bool:
@@ -234,6 +281,21 @@ class CounterpartyStore:
         successes = sum(1 for r in rows if r["outcome"] == "PASS")
         failures = sum(1 for r in rows if r["outcome"] == "FAIL")
         latencies = sorted(int(r["latency_ms"]) for r in rows if r["latency_ms"] is not None)
+        median = None
+        if latencies:
+            mid = len(latencies) // 2
+            median = latencies[mid] if len(latencies) % 2 else (latencies[mid - 1] + latencies[mid]) // 2
+        return BayesianReputation(successes, failures), median
+
+    def protocol_reputation(self, service_id: str) -> tuple[BayesianReputation, int | None]:
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT outcome, latency_ms FROM protocol_observations WHERE service_id=?",
+                (service_id,),
+            ).fetchall()
+        successes = sum(1 for r in rows if r["outcome"] == "PASS")
+        failures = sum(1 for r in rows if r["outcome"] == "FAIL")
+        latencies = sorted(int(r["latency_ms"]) for r in rows)
         median = None
         if latencies:
             mid = len(latencies) // 2

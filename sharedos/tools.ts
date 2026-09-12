@@ -71,8 +71,10 @@ function proxyTool(
     readonly description: string;
     readonly readWrite: "read" | "write";
     readonly inputSchema: JsonObject;
+    readonly capabilityPath?: readonly string[];
   },
 ): ToolHandler {
+  const serviceName = spec.name.split(".").at(-1) ?? spec.name;
   return {
     definition: {
       name: spec.name,
@@ -84,7 +86,7 @@ function proxyTool(
       requiredCapability: {
         resource: {
           namespace: COUNTERPARTY_NAMESPACE,
-          path: ["services", spec.name.split(".").at(-1) ?? spec.name],
+          path: [...(spec.capabilityPath ?? ["services", serviceName])],
         },
         action: "invoke",
       },
@@ -162,7 +164,7 @@ export function counterpartyTools(options: CounterpartyBackendOptions): readonly
     proxyTool(options, {
       name: "counterparty.trust_snapshot",
       endpoint: "/v1/trust-snapshot",
-      description: "Get Counterparty's server-owned evidence record for a SharedNet service before spending credits.",
+      description: "Return Counterparty's evidence-backed trust decision after the Router's optional active canary completes.",
       readWrite: "read",
       inputSchema: {
         type: "object",
@@ -174,11 +176,34 @@ export function counterpartyTools(options: CounterpartyBackendOptions): readonly
         },
       },
     }),
+    // Internal step of the paid Trust Snapshot flow. It shares the exact
+    // trust_snapshot capability; the buyer never supplies these fields because
+    // resolveContext fixes the actor to the Router and the driver constructs
+    // them only from a Probe-agent reply.
+    proxyTool(options, {
+      name: "counterparty.record_probe",
+      endpoint: "/v1/probe-observation",
+      description: "Persist one host-observed bounded capability canary without treating it as task-delivery evidence.",
+      readWrite: "write",
+      capabilityPath: ["services", "trust_snapshot"],
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["probe_id", "provider_id", "nonce", "output", "latency_ms"],
+        properties: {
+          probe_id: { type: "string", minLength: 1, maxLength: 200 },
+          provider_id: { type: "string", minLength: 1, maxLength: 200 },
+          nonce: { type: "string", minLength: 8, maxLength: 200 },
+          output: {},
+          latency_ms: { type: "integer", minimum: 0, maximum: 300000 },
+        },
+      },
+    }),
     trustedVerifyDeliveryTool(options),
     proxyTool(options, {
       name: "counterparty.best_execution",
       endpoint: "/v1/best-execution",
-      description: "Choose where to spend Arena credits using Counterparty-owned evidence, budget, price, fit, and uncertainty.",
+      description: "Choose where to spend Arena credits using task evidence first and bounded protocol-canary evidence to break cold start safely.",
       readWrite: "read",
       inputSchema: {
         type: "object",
