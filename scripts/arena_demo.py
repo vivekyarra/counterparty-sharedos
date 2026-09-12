@@ -11,6 +11,7 @@ from counterparty.app import create_app
 from counterparty.storage import CounterpartyStore
 
 TOKEN = "arena-demo-token-0123456789abcdef0123456789"
+MAX_PROMOTION_DELIVERIES = 32
 
 
 def run_demo() -> dict[str, object]:
@@ -57,6 +58,7 @@ def run_demo() -> dict[str, object]:
         assert after_canary_a["verdict"] == "TRY_SMALL"
         assert after_canary_a["evidence_tier"] == "PROVISIONAL"
         assert after_canary_b["verdict"] == "AVOID"
+        assert after_canary_b["evidence_tier"] == "REJECTED"
 
         provisional_route = client.post(
             "/v1/best-execution",
@@ -82,11 +84,13 @@ def run_demo() -> dict[str, object]:
             "additionalProperties": False,
         }
         assertions = [{"path": "/ok", "op": "eq", "value": True}]
-        for index in range(8):
+        mature_a = after_canary_a
+        promotion_deliveries = 0
+        while mature_a["verdict"] != "BUY" and promotion_deliveries < MAX_PROMOTION_DELIVERIES:
             delivery = client.post(
                 "/v1/verify-delivery",
                 json={
-                    "delivery_id": f"arena-paid-alpha-{index}",
+                    "delivery_id": f"arena-paid-alpha-{promotion_deliveries}",
                     "provider_id": "seller-alpha",
                     "task": "bounded paid task",
                     "task_type": "general",
@@ -97,10 +101,12 @@ def run_demo() -> dict[str, object]:
             ).json()
             assert delivery["state"] == "PASS"
             assert delivery["reputation_updated"] is True
+            promotion_deliveries += 1
+            mature_a = client.post("/v1/trust-snapshot", json={"service_id": "seller-alpha"}).json()
 
-        mature_a = client.post("/v1/trust-snapshot", json={"service_id": "seller-alpha"}).json()
         assert mature_a["verdict"] == "BUY"
         assert mature_a["evidence_tier"] == "VERIFIED"
+        assert 1 <= promotion_deliveries <= MAX_PROMOTION_DELIVERIES
 
         verified_route = client.post(
             "/v1/best-execution",
@@ -138,6 +144,7 @@ def run_demo() -> dict[str, object]:
             "after_verified_market_history": {
                 "seller_alpha": mature_a["verdict"],
                 "verified_observations": mature_a["observations"],
+                "promotion_deliveries": promotion_deliveries,
                 "safe_route": verified_route["recommended"],
                 "route_tier": verified_route["evidence_tier"],
             },
@@ -155,16 +162,19 @@ def main() -> None:
         print(json.dumps(result, indent=2, sort_keys=True))
         return
 
+    promotion = result["after_verified_market_history"]
+    assert isinstance(promotion, dict)
     print("\nCOUNTERPARTY — LIVE MARKET FLYWHEEL DEMO")
     print("=" * 48)
     print("1  seller-alpha: UNPROVEN")
     print("2  bounded canary: PASS")
     print("3  seller-alpha: TRY_SMALL  [PROVISIONAL]")
-    print("4  Safe Best Execution routes the first small spend to seller-alpha")
-    print("5  verified paid deliveries compound task reputation")
-    print("6  seller-alpha: BUY        [VERIFIED]")
-    print("7  Safe Best Execution keeps routing on stronger evidence")
-    print(f"8  audit chain valid: {result['audit_valid']}  head={result['audit']}")
+    print("4  seller-beta:  AVOID      [REJECTED]")
+    print("5  Safe Best Execution routes the first small spend to seller-alpha")
+    print(f"6  {promotion['promotion_deliveries']} verified deliveries compound Bayesian task reputation")
+    print("7  seller-alpha: BUY        [VERIFIED]")
+    print("8  Safe Best Execution keeps routing on stronger evidence")
+    print(f"9  audit chain valid: {result['audit_valid']}  head={result['audit']}")
     print("\nBefore your agent spends a credit, Counterparty proves who can do the job.\n")
 
 
