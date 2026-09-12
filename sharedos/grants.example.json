@@ -6,33 +6,49 @@
     "judge": "counterparty-judge",
     "attestor": "counterparty-attestor"
   },
-  "grants": [
+  "active_trust_snapshot_grants": [
     {
       "subject": "counterparty-router",
       "resource": "sharedos.execution/agent/counterparty-router",
       "action": "invoke",
       "maxUses": 1,
-      "note": "One bounded router turn; issue a fresh grant for the next authorized turn."
+      "note": "One bounded paid Router turn."
     },
     {
       "subject": "counterparty-router",
       "resource": "counterparty/services/trust_snapshot",
       "action": "invoke",
-      "note": "Decision agent can read Counterparty evidence; it cannot call target agents."
+      "note": "Covers trust_snapshot and the internal record_probe step; contains no seller recipient."
+    },
+    {
+      "subject": "counterparty-router",
+      "resource": "sharedos.messaging/agent/counterparty-probe",
+      "action": "send",
+      "maxUses": 1,
+      "note": "Router may ask exactly Counterparty Probe; it cannot spend this ticket on a seller."
     },
     {
       "subject": "counterparty-probe",
-      "resource": "sharednet/services/<target-service-key>",
+      "resource": "sharedos.execution/agent/counterparty-probe",
       "action": "invoke",
-      "maxUses": 3,
-      "note": "Exact target-scoped probe authority only; call four is denied."
+      "maxUses": 1,
+      "note": "One bounded Probe turn."
     },
+    {
+      "subject": "counterparty-probe",
+      "resource": "sharedos.messaging/service/<target-service-id>",
+      "action": "send",
+      "maxUses": 1,
+      "note": "Exact recipient-scoped seller canary ticket. A ticket for A cannot call B."
+    }
+  ],
+  "other_role_grants": [
     {
       "subject": "counterparty-judge",
       "resource": "counterparty.evidence/evaluations/<evaluation-id>",
       "action": "read",
       "maxUses": 8,
-      "note": "Evidence only; no target invocation."
+      "note": "Evidence only; no seller invocation."
     },
     {
       "subject": "counterparty-attestor",
