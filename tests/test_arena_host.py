@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ARENA_HOST = Path(__file__).resolve().parents[1] / "scripts" / "arena_host.py"
 
 
