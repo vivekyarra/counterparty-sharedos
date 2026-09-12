@@ -30,7 +30,7 @@ def env(name: str) -> str:
 
 def fetch_json(url: str) -> dict[str, object]:
     request = urllib.request.Request(url, headers={"user-agent": "counterparty-arena-preflight/0.3"})
-    with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 -- operator-supplied HTTPS deployment URL
+    with urllib.request.urlopen(request, timeout=5) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
