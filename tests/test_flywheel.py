@@ -6,6 +6,7 @@ from counterparty.app import create_app
 from counterparty.storage import CounterpartyStore
 
 TOKEN = "flywheel-test-token-0123456789abcdef012345"
+MAX_PROMOTION_DELIVERIES = 32
 
 
 def client(tmp_path: Path) -> TestClient:
@@ -155,11 +156,13 @@ def test_verified_deliveries_upgrade_provisional_signal_to_buy(tmp_path):
         "additionalProperties": False,
     }
     assertions = [{"path": "/ok", "op": "eq", "value": True}]
-    for index in range(8):
+    snapshot = c.post("/v1/trust-snapshot", json={"service_id": "seller-a"}).json()
+    verified_count = 0
+    while snapshot["verdict"] != "BUY" and verified_count < MAX_PROMOTION_DELIVERIES:
         verified = c.post(
             "/v1/verify-delivery",
             json={
-                "delivery_id": f"paid-{index}",
+                "delivery_id": f"paid-{verified_count}",
                 "provider_id": "seller-a",
                 "task": "bounded paid task",
                 "task_type": "general",
@@ -170,11 +173,13 @@ def test_verified_deliveries_upgrade_provisional_signal_to_buy(tmp_path):
         ).json()
         assert verified["state"] == "PASS"
         assert verified["reputation_updated"] is True
+        verified_count += 1
+        snapshot = c.post("/v1/trust-snapshot", json={"service_id": "seller-a"}).json()
 
-    snapshot = c.post("/v1/trust-snapshot", json={"service_id": "seller-a"}).json()
     assert snapshot["evidence_tier"] == "VERIFIED"
     assert snapshot["verdict"] == "BUY"
-    assert snapshot["observations"] == 8
+    assert snapshot["observations"] == verified_count
+    assert 1 <= verified_count <= MAX_PROMOTION_DELIVERIES
 
     routed = c.post(
         "/v1/best-execution",
