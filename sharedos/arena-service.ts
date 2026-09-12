@@ -461,7 +461,7 @@ export async function runArenaBatch(batch: SharedNetWatchBatch): Promise<JsonObj
           tools: [...probeTools],
           message: request,
           options: { maxSteps: 4, maxToolCalls: 1, timeoutMs: 10_000 },
-        }, signal);
+        }, { signal });
         const output: JsonValue =
           probe.status === "succeeded"
             ? probe.output
