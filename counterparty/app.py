@@ -151,6 +151,15 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
             verdict = "AVOID"
             action = "SKIP"
 
+        if rep.observations:
+            evidence_tier = "VERIFIED"
+        elif protocol_rep.observations and protocol_rep.failures > protocol_rep.successes:
+            evidence_tier = "REJECTED"
+        elif protocol_rep.observations:
+            evidence_tier = "PROVISIONAL"
+        else:
+            evidence_tier = "UNPROVEN"
+
         event = store.append_audit(
             "trust_snapshot",
             {
@@ -161,6 +170,7 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
                 "confidence": rep.confidence,
                 "observations": rep.observations,
                 "protocol_observations": protocol_rep.observations,
+                "evidence_tier": evidence_tier,
                 "verdict": verdict,
                 "action": action,
             },
@@ -174,7 +184,7 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
             "observations": rep.observations,
             "verdict": verdict,
             "action": action,
-            "evidence_tier": "VERIFIED" if rep.observations else ("PROVISIONAL" if protocol_rep.observations else "UNPROVEN"),
+            "evidence_tier": evidence_tier,
             "evidence": {"successes": rep.successes, "failures": rep.failures, "median_latency_ms": median_latency},
             "protocol_evidence": {
                 "successes": protocol_rep.successes,
@@ -333,12 +343,13 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
                 confidence = rep.confidence
                 evidence_tier = "VERIFIED"
             elif protocol_rep.observations > 0:
-                # Canary evidence proves current protocol responsiveness, not the
-                # buyer's domain task. Keep it visibly provisional and shrink it
-                # halfway back toward neutral before routing.
+                # A returned failed canary is stronger than mere uncertainty: it
+                # is a deterministic negative signal. Keep it in the ranked
+                # evidence table, but never route spend to it. Passing/mixed
+                # non-negative canary history remains explicitly provisional.
                 trust = 50.0 + 0.5 * (protocol_rep.score_100() - 50.0)
                 confidence = min(0.5, 0.2 + 0.5 * protocol_rep.confidence)
-                evidence_tier = "PROVISIONAL"
+                evidence_tier = "REJECTED" if protocol_rep.failures > protocol_rep.successes else "PROVISIONAL"
             else:
                 trust = 50.0
                 confidence = 0.0
@@ -360,7 +371,8 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
 
         ranked = rank(candidate_scores, req.budget_credits, req.mode)
         viable = [(c, u) for c, u in ranked if u > -1e8]
-        evidence_ready = [x for x in viable if x[0].evidence_tier != "UNPROVEN"]
+        routeable = [x for x in viable if x[0].evidence_tier != "REJECTED"]
+        evidence_ready = [x for x in routeable if x[0].evidence_tier in {"VERIFIED", "PROVISIONAL"}]
 
         def row(c: CandidateScore, u: float) -> dict[str, object]:
             return {
@@ -376,20 +388,26 @@ def create_app(store: CounterpartyStore | None = None, internal_token: str | Non
 
         if not viable:
             result: dict[str, object] = {"state": "INCONCLUSIVE", "reason": "No candidate fits the budget", "ranked": []}
+        elif not routeable:
+            result = {
+                "state": "INCONCLUSIVE",
+                "reason": "Every in-budget candidate is rejected by deterministic active-canary evidence.",
+                "ranked": [row(c, u) for c, u in viable],
+            }
         elif req.mode == "safe" and not evidence_ready:
             result = {
                 "state": "INCONCLUSIVE",
-                "reason": "No in-budget candidate has verified delivery evidence or a fresh protocol canary.",
+                "reason": "No in-budget candidate has verified delivery evidence or a passing protocol canary.",
                 "ranked": [row(c, u) for c, u in viable],
                 "next_action": {
                     "service": "trust_snapshot",
                     "price_credits": 4,
                     "reason": "Trust Snapshot actively canary-tests an unknown seller under a bounded SharedOS Probe grant.",
-                    "targets": [c.service_id for c, _ in viable[:5]],
+                    "targets": [c.service_id for c, _ in routeable if c.evidence_tier == "UNPROVEN"][:5],
                 },
             }
         else:
-            winner = evidence_ready[0] if req.mode == "safe" else viable[0]
+            winner = evidence_ready[0] if req.mode == "safe" else routeable[0]
             result = {
                 "state": "PASS",
                 "recommended": winner[0].service_id,
