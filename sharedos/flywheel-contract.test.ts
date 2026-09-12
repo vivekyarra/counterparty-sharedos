@@ -42,7 +42,7 @@ function grantSource(grants: CapabilityGrant[]) {
   };
 }
 
-function context(actor: Address, traceId = crypto.randomUUID()): AccessContext {
+function context(actor: Address, traceId: string = crypto.randomUUID()): AccessContext {
   return {
     namespaceId: NAMESPACE,
     actor,
