@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test *.test.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "arena:serve": "tsx arena-service.ts"
   },
   "dependencies": {
     "@aicoo/sharedos": "0.1.0-alpha.5"
