@@ -113,16 +113,20 @@ export function routerProbeMessageGrant(
  * Canonical production seller-contact grant. `messages.request` resolves the
  * requirement to this exact service recipient, so a ticket for target A cannot
  * be spent on target B and the Router never receives this authority.
+ *
+ * Production callers may supply a request-scoped id so retries and concurrent
+ * snapshots against the same SharedNet seat never share a maxUses counter.
  */
 export function probeMessageGrant(
   owner: Address,
   namespaceId: string,
   targetServiceKey: string,
   maxUses = 1,
+  id?: string,
 ): CapabilityGrant {
   const target = { kind: "service", serviceId: targetServiceKey } as const;
   return {
-    id: `grant-probe-message-${targetServiceKey}`,
+    id: id ?? `grant-probe-message-${targetServiceKey}`,
     namespaceId,
     subject: COUNTERPARTY_PROBE,
     issuer: owner,
@@ -205,11 +209,7 @@ export function attestorReceiptGrant(
     issuer: owner,
     capabilities: [
       {
-        resource: {
-          namespace: "counterparty.attestations",
-          path: ["evaluations", evaluationId],
-          owner,
-        },
+        resource: { namespace: "counterparty.attestations", path: ["evaluations", evaluationId], owner },
         actions: ["create"],
         scope: "exact",
       },
