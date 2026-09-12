@@ -9,11 +9,17 @@ import urllib.request
 from dataclasses import dataclass
 
 PURPOSE = "counterparty.verify-and-route-sharednet-services"
-DEFAULT_ADDRESSES = {
-    "COUNTERPARTY_ROUTER_ADDRESS": "counterparty-router",
-    "COUNTERPARTY_PROBE_ADDRESS": "counterparty-probe",
-    "COUNTERPARTY_JUDGE_ADDRESS": "counterparty-judge",
-    "COUNTERPARTY_ATTESTOR_ADDRESS": "counterparty-attestor",
+CANONICAL_AGENT_ADDRESSES = {
+    "router": "counterparty-router",
+    "probe": "counterparty-probe",
+    "judge": "counterparty-judge",
+    "attestor": "counterparty-attestor",
+}
+ADDRESS_ENV = {
+    "router": "COUNTERPARTY_ROUTER_ADDRESS",
+    "probe": "COUNTERPARTY_PROBE_ADDRESS",
+    "judge": "COUNTERPARTY_JUDGE_ADDRESS",
+    "attestor": "COUNTERPARTY_ATTESTOR_ADDRESS",
 }
 
 
@@ -33,10 +39,11 @@ def truthy(name: str) -> bool:
 
 
 def sharednet_address(value: str) -> bool:
-    # Organizer guidance distinguishes i* seat, a* tag, and p* account
-    # addresses. Keep validation intentionally loose because exact separators
-    # are a SharedNet transport concern and can change independently.
-    return len(value) >= 3 and value[0].lower() in {"i", "a", "p"}
+    return len(value) == 12 and value[:2] in {"i_", "a_", "p_"} and value[2:].isalnum()
+
+
+def sharednet_seat(value: str) -> bool:
+    return len(value) == 12 and value.startswith("i_") and value[2:].isalnum()
 
 
 def fetch_json(url: str) -> dict[str, object]:
@@ -48,15 +55,18 @@ def fetch_json(url: str) -> dict[str, object]:
 def run(live: bool) -> tuple[list[Check], dict[str, object]]:
     checks: list[Check] = []
     token = env("COUNTERPARTY_INTERNAL_TOKEN")
-    checks.append(Check("private ingress token", len(token) >= 32, "configured" if len(token) >= 32 else "missing or shorter than 32 chars"))
+    checks.append(
+        Check(
+            "private ingress token",
+            len(token) >= 32,
+            "configured" if len(token) >= 32 else "missing or shorter than 32 chars",
+        )
+    )
 
-    # SharedNet Arena transport is room/message based. The representative seat
-    # is what other agents address; credits settle to a p*/a*/i* payee address.
-    # A SharedOS tenant ID/owner address is deliberately NOT required here: the
-    # current SharedOS model keeps the kernel in the application and uses Cloud
-    # for decision/audit visibility.
+    # Organizer guidance identifies the representative product endpoint by its
+    # live SharedNet Instance/seat. Payments may target p_, a_, or i_ addresses.
     node_id = env("SHAREDNET_NODE_ID")
-    checks.append(Check("SHAREDNET_NODE_ID", sharednet_address(node_id), node_id or "missing"))
+    checks.append(Check("SHAREDNET_NODE_ID", sharednet_seat(node_id), node_id or "missing"))
 
     payee = env("SHAREDNET_PAYEE_ADDRESS")
     checks.append(Check("SHAREDNET_PAYEE_ADDRESS", sharednet_address(payee), payee or "missing"))
@@ -65,29 +75,42 @@ def run(live: bool) -> tuple[list[Check], dict[str, object]]:
         Check(
             "SharedOS Cloud audit confirmed",
             truthy("SHAREDOS_AUDIT_CONFIRMED"),
-            "confirmed" if truthy("SHAREDOS_AUDIT_CONFIRMED") else "set SHAREDOS_AUDIT_CONFIRMED=1 only after a real product turn is visible in Cloud audit",
+            "confirmed"
+            if truthy("SHAREDOS_AUDIT_CONFIRMED")
+            else "set SHAREDOS_AUDIT_CONFIRMED=1 only after a real Counterparty turn is visible in SharedOS Cloud audit",
         )
     )
     checks.append(
         Check(
             "SharedNet external call confirmed",
             truthy("SHAREDNET_EXTERNAL_CALL_CONFIRMED"),
-            "confirmed" if truthy("SHAREDNET_EXTERNAL_CALL_CONFIRMED") else "set SHAREDNET_EXTERNAL_CALL_CONFIRMED=1 only after another seat calls Counterparty and receives a reply",
+            "confirmed"
+            if truthy("SHAREDNET_EXTERNAL_CALL_CONFIRMED")
+            else "set SHAREDNET_EXTERNAL_CALL_CONFIRMED=1 only after another seat calls Counterparty and receives a reply",
         )
     )
 
-    addresses: dict[str, str] = {}
-    for name, default in DEFAULT_ADDRESSES.items():
-        value = env(name)
-        addresses[name] = value
-        ok = bool(value) and value != default
-        checks.append(Check(name, ok, "production address configured" if ok else "missing or still using repository placeholder"))
+    # These are the actual SharedOS Address.agentId values used by the runtime
+    # and therefore the identities judges should search in the audit trail. An
+    # environment override may repeat the canonical value, but may not invent a
+    # different 'production' identity that the TypeScript runtime never uses.
+    for role, canonical in CANONICAL_AGENT_ADDRESSES.items():
+        env_name = ADDRESS_ENV[role]
+        configured = env(env_name)
+        ok = configured in {"", canonical}
+        detail = canonical if ok else f"must be {canonical!r}, got {configured!r}"
+        checks.append(Check(f"SharedOS {role} address", ok, detail))
 
-    # A public HTTPS URL is useful for liveness/agent-card proof, but SharedNet
-    # Arena calls are messages, not HTTP RPCs. Therefore it is optional. When a
-    # URL is supplied in --live mode, validate it strictly.
+    # SharedNet Arena calls are Room messages, not HTTP RPCs. A public URL is
+    # optional; when supplied, validate it strictly as additional evidence.
     public_url = env("COUNTERPARTY_PUBLIC_URL").rstrip("/")
-    checks.append(Check("COUNTERPARTY_PUBLIC_URL (optional)", True, public_url or "not required for SharedNet message transport"))
+    checks.append(
+        Check(
+            "COUNTERPARTY_PUBLIC_URL (optional)",
+            True,
+            public_url or "not required for SharedNet message transport",
+        )
+    )
 
     remote: dict[str, object] = {}
     if live and public_url:
@@ -102,13 +125,13 @@ def run(live: bool) -> tuple[list[Check], dict[str, object]]:
                 checks.append(Check("remote version", health.get("version") == "0.3.0", str(health.get("version"))))
                 checks.append(Check("purpose", card.get("purpose") == PURPOSE, str(card.get("purpose"))))
                 card_addresses = card.get("agent_addresses")
-                expected = {
-                    "router": addresses["COUNTERPARTY_ROUTER_ADDRESS"],
-                    "probe": addresses["COUNTERPARTY_PROBE_ADDRESS"],
-                    "judge": addresses["COUNTERPARTY_JUDGE_ADDRESS"],
-                    "attestor": addresses["COUNTERPARTY_ATTESTOR_ADDRESS"],
-                }
-                checks.append(Check("production agent addresses", card_addresses == expected, str(card_addresses)))
+                checks.append(
+                    Check(
+                        "canonical SharedOS agent addresses",
+                        card_addresses == CANONICAL_AGENT_ADDRESSES,
+                        str(card_addresses),
+                    )
+                )
             except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 checks.append(Check("remote deployment", False, f"unreachable or invalid: {exc}"))
 
@@ -117,7 +140,7 @@ def run(live: bool) -> tuple[list[Check], dict[str, object]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fail-closed Shared OS / SharedNet Arena deployment preflight")
-    parser.add_argument("--live", action="store_true", help="Also validate the optional deployed health and agent-card endpoints")
+    parser.add_argument("--live", action="store_true", help="Also validate optional deployed health and agent-card endpoints")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of a human checklist")
     args = parser.parse_args()
 
@@ -127,6 +150,7 @@ def main() -> None:
         "ready": ok,
         "purpose": PURPOSE,
         "transport": "SharedNet Room message",
+        "sharedos_agent_addresses": CANONICAL_AGENT_ADDRESSES,
         "checks": [{"name": check.name, "ok": check.ok, "detail": check.detail} for check in checks],
         "remote": remote,
     }
