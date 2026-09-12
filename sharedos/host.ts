@@ -19,11 +19,13 @@ import {
   type DelegationChainResolver,
   type GrantSource,
   type GrantUsageStore,
+  type MessageRequestRouter,
+  type MessageTransport,
   type ToolNamespaceSettingsStore,
   type TurnErrorReporter,
 } from "@aicoo/sharedos";
 
-import { CounterpartyRouterDriver } from "./router-driver.js";
+import { CounterpartyRoleDriver } from "./router-driver.js";
 import { counterpartyTools, type CounterpartyBackendOptions } from "./tools.js";
 
 export interface CounterpartySharedOSHostDeps {
@@ -32,6 +34,8 @@ export interface CounterpartySharedOSHostDeps {
   readonly delegationResolver?: DelegationChainResolver;
   readonly audit: AuditSink;
   readonly toolNamespaceSettings: ToolNamespaceSettingsStore;
+  readonly messageTransport: MessageTransport;
+  readonly messageRequestRouter: MessageRequestRouter;
   readonly resolveContext: (request: Request) => Promise<AccessContext>;
   readonly backend: CounterpartyBackendOptions;
   readonly onError?: (error: unknown, request: Request, requestId: string) => void;
@@ -52,6 +56,9 @@ export function createCounterpartySharedOSHost(deps: CounterpartySharedOSHostDep
     authorizer,
     audit: deps.audit,
     toolNamespaceSettings: deps.toolNamespaceSettings,
+    messageTransport: deps.messageTransport,
+    messageRequestRouter: deps.messageRequestRouter,
+    createMessageId: () => crypto.randomUUID(),
     ...(deps.onProviderError === undefined ? {} : { onProviderError: deps.onProviderError }),
   });
 
@@ -62,12 +69,14 @@ export function createCounterpartySharedOSHost(deps: CounterpartySharedOSHostDep
   // caller enables the SharedOS namespace and holds a separate escalation grant.
   kernel.registerTool(createEscalationTool());
 
-  const runtime = new StandardRuntime(new CounterpartyRouterDriver(), {
+  const runtime = new StandardRuntime(new CounterpartyRoleDriver(), {
     ...(deps.onTurnError === undefined ? {} : { onTurnError: deps.onTurnError }),
   });
   const turns = new SharedOSExecutor(kernel, runtime, {
-    defaultMaxSteps: 4,
-    defaultMaxToolCalls: 2,
+    // Active Trust Snapshot: Router -> Probe request, record raw canary, return
+    // refreshed snapshot. The nested Probe turn has its own independent budget.
+    defaultMaxSteps: 6,
+    defaultMaxToolCalls: 3,
     defaultTimeoutMs: 15_000,
     ...(deps.onTurnError === undefined ? {} : { onTurnError: deps.onTurnError }),
   });
