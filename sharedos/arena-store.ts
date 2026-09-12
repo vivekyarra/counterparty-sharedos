@@ -13,6 +13,8 @@ import type { TrustedDelivery, TrustedDeliveryResolver } from "./tools.js";
 
 type PaymentClaim = "claimed" | "same_request" | "conflict";
 
+const SHAREDOS_AUDIT_ENDPOINT = "https://www.sharedos.ai/v1/audit/events";
+
 export class ArenaStore implements GrantSource, GrantUsageStore, TrustedDeliveryResolver {
   readonly #db: DatabaseSync;
 
@@ -119,6 +121,28 @@ export class ArenaStore implements GrantSource, GrantUsageStore, TrustedDelivery
       event.traceId ?? null,
       JSON.stringify(event),
     );
+
+    const sharedOsKey = (process.env.SHAREDOS_KEY ?? "").trim();
+    if (sharedOsKey.length === 0) return;
+
+    try {
+      const response = await fetch(SHAREDOS_AUDIT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${sharedOsKey}`,
+        },
+        body: JSON.stringify({ events: [event] }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) {
+        console.error(`SharedOS Cloud audit upload failed with HTTP ${response.status}`);
+      }
+    } catch (error) {
+      console.error(
+        `SharedOS Cloud audit upload failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   claimPayment(input: {
