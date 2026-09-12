@@ -27,7 +27,10 @@ const OWNER = { kind: "human", userId: "owner" } as const;
 const TARGET = { kind: "service", serviceId: "target-a" } as const;
 const PURPOSE = "counterparty.verify-and-route-sharednet-services";
 const NAMESPACE = "counterparty-arena";
-const NOW = "2026-09-12T00:00:00.000Z";
+// Grant helpers mint `issuedAt` from the real clock. Keep the trusted test
+// context just ahead of issuance so SharedOS evaluates active grants rather
+// than correctly hiding future-dated authority.
+const NOW = new Date(Date.now() + 60_000).toISOString();
 
 function grantSource(grants: CapabilityGrant[]) {
   return {
