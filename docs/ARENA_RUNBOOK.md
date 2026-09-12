@@ -2,59 +2,88 @@
 
 This runbook is designed for the event's **no-human-in-the-loop** period. The representative personal agent must be able to execute it without a person widening authority, repairing data, choosing purchases, or manually delivering results live.
 
-Current organizer-confirmed SharedNet transport details live in [`SHAREDNET_ARENA.md`](SHAREDNET_ARENA.md).
+Current SharedNet transport details live in [`SHAREDNET_ARENA.md`](SHAREDNET_ARENA.md).
 
 ## Before Arena opens
 
-- Run Counterparty through the SharedOS-governed host boundary with the frozen v0.3 release.
-- Set a cryptographically random `COUNTERPARTY_INTERNAL_TOKEN` in private components.
-- Configure durable SharedOS grant, bounded-use, namespace, delegation, message-routing, and audit stores/ports.
-- Set final Router, Probe, Judge, and Attestor addresses.
-- Configure recipient-scoped Router -> Probe and Probe -> seller grants for active Trust Snapshot calls.
-- Verify real Router and Probe turns/decisions appear in SharedOS Cloud audit.
-- Join the organizer-provided SharedNet QA Room and record the representative seat/node ID (`i*...`).
-- Record the real Arena payee address (`p*...`, `a*...`, or approved `i*...` target). These address classes are not interchangeable.
-- Set SharedNet reachability appropriately (`sharednet reach public` for the advertised Arena seat unless organizer policy changes).
-- Publish the Counterparty seat ID in Devpost/README/Discord once assigned. Discovery is the Room roster plus published seat IDs; there is no global service registry.
-- Validate the message transport with another seat: request -> SharedOS Router turn -> reply.
-- Validate one room-visible payment receipt through SharedNet's native ledger path. Never accept a buyer-authored string saying `paid` as payment proof.
-- Confirm each of the three services can reply inside the five-minute event cap: Trust Snapshot 4, Verify Delivery 7, Best Execution 10.
-- Redeem the Arena float with `HACK100` using the authenticated SharedNet CLI or connector.
-- Run `python scripts/arena_demo.py` against the frozen release.
-- Set `SHAREDOS_AUDIT_CONFIRMED=1` only after real Cloud audit evidence exists.
-- Set `SHAREDNET_EXTERNAL_CALL_CONFIRMED=1` only after another seat actually calls Counterparty and receives a reply.
+- Use the frozen Counterparty release through the SharedOS-governed host boundary.
+- Set a cryptographically random `COUNTERPARTY_INTERNAL_TOKEN`.
+- Use the canonical SharedOS audit identities exactly as implemented:
+  - `counterparty-router`
+  - `counterparty-probe`
+  - `counterparty-judge`
+  - `counterparty-attestor`
+- Verify real Router/Probe decisions appear in SharedOS Cloud audit.
+- Authenticate SharedNet and join the organizer-provided QA/competition Room.
+- Record the representative `i_...` seat/node ID and the real payee (`p_...`, `a_...`, or `i_...`).
+- Make the advertised Arena seat reachable with `sharednet reach public`.
+- Validate one external request → payment → SharedOS Router turn → reply from another seat.
+- Confirm Trust Snapshot 4, Verify Delivery 7, and Best Execution 10 all complete inside the five-minute cap.
+- Redeem `HACK100` if not already redeemed for the account.
+- Set `SHAREDOS_AUDIT_CONFIRMED=1` only after a real Cloud audit turn exists.
+- Set `SHAREDNET_EXTERNAL_CALL_CONFIRMED=1` only after another seat actually buys/calls Counterparty.
 - Run `python scripts/arena_preflight.py --live`; do not enter Arena unless it reports `READY=True`.
-- Run the full GitHub Actions release matrix against the exact commit used for the event.
-- Freeze the release commit. Do not live-patch during the Arena.
+- Confirm GitHub Actions is green on the exact commit used for the event, then freeze it.
 
-The competition Room invite is expected only near Arena start (organizer guidance: two hours before the competition). The QA Room is for preflight; do not assume it is the competition Room.
+The competition Room is supplied by the organizers near Arena start. Follow the latest organizer message rather than hard-coding the QA Room or an older release-time estimate.
 
-## SharedNet service invocation
+## Launch Counterparty
 
-SharedNet calls are messages, not HTTP RPCs. The advertised Counterparty seat receives a logical request envelope:
+From the authenticated checkout after joining the current Room:
+
+```bash
+python scripts/arena_host.py
+```
+
+For QA only, bound the watcher:
+
+```bash
+python scripts/arena_host.py --max-runs 5
+```
+
+The launcher:
+
+1. verifies `sharednet whoami --json` has an account and current `i_...` seat;
+2. sets `SHAREDNET_SEAT`, `SHAREDNET_NODE_ID`, and `SHAREDNET_ROOM_ID` from that selected seat;
+3. executes `sharednet reach public` using the selected seat from environment;
+4. starts the private FastAPI backend on localhost;
+5. runs the official provider loop:
+
+```bash
+sharednet watch --on message --run '<Counterparty arena:serve command>' --reply --as <seat>
+```
+
+The current SharedNet watcher passes JSON on stdin as `{room_id, member_id, trigger, messages}` and sets Room/member/message-count/last-sequence environment variables. The repository adapter consumes that exact contract; it no longer guesses the callback format.
+
+## SharedNet request contract
+
+A buyer sends:
 
 ```json
 {
   "type": "counterparty.service.request.v1",
   "request_id": "unique-id",
   "service": "trust_snapshot",
-  "input": {}
+  "input": {
+    "service_id": "i_TargetSeat1"
+  }
 }
 ```
 
-The adapter passes `{service,input}` into the existing SharedOS Router. The reply preserves `request_id`, service and price so the buyer can match asynchronous Room traffic.
+If `payment_txn_id` is absent, Counterparty returns `PAYMENT_REQUIRED` with the exact fixed price, payee, memo, and payment command. The buyer then sends the same logical request with the SharedNet `txn_...` ID.
 
-Organizer-confirmed service-loop form:
+Counterparty verifies native ledger evidence before running a paid turn. A payment must match:
 
-```bash
-sharednet watch --on message --run './serve.sh' --reply
-```
+- transaction ID;
+- **the same requesting SharedNet seat** (`by_instance_id`);
+- configured payee;
+- exact service price;
+- current Room;
+- request ID and service in the memo.
 
-Do **not** implement `serve.sh` by guessing what the latest CLI supplies on stdin/environment. Inspect the authenticated latest SharedNet CLI/Skills package first, then bind that native event shape to the envelope above.
+A transaction is then durably bound to one request/fingerprint so a visible Room receipt cannot be replayed or stolen by another buyer.
 
 ## Autonomous flywheel
-
-Counterparty should continuously turn uncertainty into evidence rather than waiting for historical reputation to appear:
 
 ```text
 unknown seller
@@ -69,80 +98,55 @@ unknown seller
    -> stronger market graph
 ```
 
-The key rule is that protocol canaries and task-delivery evidence stay distinct. A passing canary is enough to justify a small exploratory purchase; it is not enough to claim the seller already succeeded on the buyer's task.
+Protocol canaries and task-delivery evidence stay distinct. A passing canary can justify a small exploratory purchase; it does not prove prior task success.
 
-## Round 1 — create the first market data
+## Round 1 — Agents' Choice
 
-Counterparty's representative agent should satisfy the event obligations while deliberately seeding useful evidence:
+1. Read the Arena Room roster and current service offers.
+2. Try at least three other products with concrete tasks.
+3. Produce one specific disagreement/critique for every product tried.
+4. Use Trust Snapshot on relevant unfamiliar sellers so Counterparty creates useful cold-start evidence.
+5. Verify deterministic deliveries when trusted evidence exists.
+6. Preserve `PROVISIONAL`, `VERIFIED`, `REJECTED`, and `UNPROVEN` distinctions in reasoning.
+7. Submit the required ranking.
 
-1. Read the Arena Room roster and discover unfamiliar seats, nicknames and tags.
-2. Read/publish service offers and fixed prices through Room messages; do not assume a registry endpoint exists.
-3. Buy/use Trust Snapshot on promising unfamiliar sellers so the active Probe can create fresh protocol evidence instead of returning an empty cold-start database.
-4. Try at least three other products, using tasks with specific expected outputs rather than generic conversation.
-5. Record one concrete disagreement/critique for every product tried.
-6. Verify deliveries whenever an immutable Counterparty delivery/trade evidence ID and deterministic contract are available.
-7. Use `explore` mode while evidence is sparse, but preserve all evidence-tier labels in the reasoning.
-8. Prefer trying sellers that are likely to matter in Round 2 so Round-1 activity produces reusable task reputation.
-9. Submit the required ranking.
+Pitch Counterparty in one sentence before discussing architecture:
 
-An unavailable seller is not automatically dishonest. Transport/authority failure remains `INCONCLUSIVE` unless a returned canary or promised service contract gives Counterparty enough evidence for a deterministic failure.
+> Before you spend scarce Arena credits, Counterparty tests the seller, verifies the delivery, and routes the next purchase using evidence rather than self-description.
 
-## Round 2 — maximize useful spend and Counterparty revenue
+## Round 2 — Top Earner
 
-The representative agent must independently satisfy the event spend requirement. Counterparty should help it allocate credits quickly, not become a blocker:
+1. Keep the Counterparty seat online and responsive.
+2. Offer **Trust Snapshot — 4 credits** as the low-friction pre-spend purchase.
+3. After a buyer makes a purchase, offer **Verify Delivery — 7 credits** to turn it into reusable task evidence.
+4. Offer **Best Execution — 10 credits** before the buyer's next meaningful spend.
+5. For Counterparty's own representative agent, independently satisfy the event spend requirement across the required number of other products.
+6. Use SharedNet-native `pay ... --room` receipts and ledger evidence for every paid service.
 
-1. Read current candidate seats/offers/prices from the Arena Room.
-2. For any attractive but unproven seller, buy Trust Snapshot first. The 4-credit product is deliberately the low-friction entry point into the Counterparty funnel.
-3. Feed candidate prices and fit into Safe Best Execution.
-4. If Safe Best Execution returns `INCONCLUSIVE` with `next_action=trust_snapshot`, acquire those snapshots instead of manually guessing.
-5. If the recommendation tier is `PROVISIONAL`, make a small first purchase rather than a maximal purchase.
-6. Verify that delivery. A decisive verified result upgrades the seller to task evidence and makes future routing stronger.
-7. Re-run Best Execution before the next meaningful spend.
-8. Spend at least the event-required amount across at least the event-required number of distinct products.
-9. For Counterparty sales, use SharedNet-native `pay ... --room` receipts/ledger evidence. Payment address and service price must be explicit in the offer/reply.
+The commercial loop is intentional: **uncertainty creates demand for Trust Snapshot; purchases create demand for Verify Delivery; accumulated evidence creates demand for Best Execution.**
 
-This loop is intentionally commercial: **uncertainty creates demand for Trust Snapshot; purchases create demand for Verify Delivery; accumulated evidence creates demand for Best Execution.**
+## Active canary discipline
 
-## Payment and delivery discipline
-
-Organizer guidance distinguishes three SharedNet address classes:
-
-```text
-i*...  seat — what another agent calls
- a*... tag  — role/tag address
- p*... account — what is normally paid
-```
-
-Use the real payee address in Arena messages. Representative payment form:
-
-```bash
-sharednet pay <p*...|a*...|i*...> <amount> --memo "Counterparty <service> <request_id>" --room
-```
-
-The `--room` receipt makes the trade visible where it was agreed. The service adapter should verify native payment/ledger evidence before delivering a paid service; it must not treat message text as proof of payment.
+Trust Snapshot requires the target's exact `i_...` seat. Router has no seller-call authority. Router asks Probe under a one-use grant; Probe receives a separate one-use grant for the exact target seat. Counterparty sends the canary into the Room and polls sender-filtered history with `read --from-instance <target>` so nested probing does not consume the parent provider watch cursor. Only a reply from that exact seat with the host-generated nonce and `ack:true` can become passing protocol evidence.
 
 ## Failure behavior
 
-- **Router lacks Trust Snapshot service authority:** escalate only if the separate SharedOS escalation grant is visible; otherwise return `INCONCLUSIVE`.
-- **Router lacks Router -> Probe message authority:** return the historical snapshot with `fresh_probe=INCONCLUSIVE`; never contact the seller directly.
-- **Probe lacks exact seller authority:** Probe returns `INCONCLUSIVE`; it does not borrow Router authority or broaden the recipient.
-- **Seller returns the wrong nonce/schema:** deterministic canary `FAIL`; protocol evidence may update once.
-- **Seller/transport returns no verifiable reply:** `INCONCLUSIVE`; do not poison seller reputation from our own missing authority or transport ambiguity.
-- **SharedNet payment cannot be confirmed:** do not claim a paid delivery; reply with a payment/evidence-needed state instead of trusting caller text.
-- **Backend storage unavailable:** fail closed; no in-memory fallback for authoritative evidence.
-- **Grant usage store unavailable:** bounded SharedOS calls deny; do not switch to unbounded grants.
-- **Audit sink failure:** release-blocking before Arena. During Arena, preserve the SharedOS outcome; do not ask a human to repair live.
-- **Counterparty core unhealthy:** stop advertising successful delivery rather than returning cached/invented results.
+- Missing service authority → `INCONCLUSIVE`/deny; never widen grants silently.
+- Missing Router→Probe authority → historical snapshot only; Router never contacts seller directly.
+- Missing Probe→seller authority → `INCONCLUSIVE`; Probe cannot borrow Router authority.
+- Wrong canary nonce/schema → deterministic `FAIL`.
+- Seller/transport returns no verifiable reply → `INCONCLUSIVE`, not dishonest-by-default.
+- Ledger unavailable → `INCONCLUSIVE`; do not deliver a paid service on unverified payment.
+- Payment receipt belongs to another seat → `PAYMENT_NOT_VERIFIED`.
+- Storage/usage store unavailable → fail closed; no in-memory authoritative fallback.
+- SharedOS Cloud audit not visible before Arena → release blocker.
+- Core unhealthy → stop advertising successful delivery rather than fabricate/cached-success responses.
 
-## Machine-to-machine pitch
-
-> You have scarce credits and every seller describes itself. Counterparty tests an unknown seller before you risk a larger purchase, verifies what the seller delivers after you buy, and turns every verified trade into a stronger routing signal for the next credit. Message our Arena seat, pay the fixed price through SharedNet, and get an evidence-tiered decision. The Router cannot call sellers directly, the Probe gets one exact recipient ticket, and missing evidence never becomes a pass.
-
-## Short sales hooks by service
+## Sales hooks
 
 **Trust Snapshot — 4 credits**
 
-> Don't buy a stranger on description alone. I can create a fresh bounded proof event now and return BUY, TRY_SMALL, CAUTION, or AVOID with the evidence tier attached.
+> Don't buy a stranger on description alone. I can create a fresh bounded proof event now and return BUY, TRY_SMALL, CAUTION, UNPROVEN, or AVOID with the evidence tier attached.
 
 **Verify Delivery — 7 credits**
 
@@ -150,4 +154,4 @@ The `--room` receipt makes the trade visible where it was agreed. The service ad
 
 **Best Execution — 10 credits**
 
-> Give me the candidate seats, prices, fit and budget. I will route the next credit using verified task evidence first, provisional canary evidence second, and tell you the next evidence-producing action if the market is still empty.
+> Give me candidate seats, prices, fit and budget. I will route the next credit using verified task evidence first, provisional canary evidence second, and tell you the next evidence-producing action if the market is still empty.
