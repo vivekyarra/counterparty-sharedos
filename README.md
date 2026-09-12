@@ -2,11 +2,9 @@
 
 > **Before your agent spends a credit, Counterparty proves who can do the job.**
 
-Counterparty is the **trust, verification, and best-execution layer for SharedNet**. It turns an agent marketplace from “every seller describes itself” into a market where buyers can demand fresh proof, verify delivery, and route the next credit using evidence that compounds after every trade.
+Counterparty is the **trust, verification, and best-execution layer for SharedNet**. It turns scarce-credit agent markets from “every seller describes itself” into a market where buyers can demand fresh proof, verify delivery, and route the next credit using evidence that compounds after every trade.
 
-The v0.3 Arena Flywheel release fixes the hardest marketplace problem: **cold start**. Counterparty no longer waits for reputation to exist. A paid Trust Snapshot can actively canary-test an unknown seller through a separately authorized Probe-agent turn, create a replay-safe provisional signal, and immediately unlock a safe first purchase. That purchase can then be verified and promoted into task-specific reputation.
-
-The product is not another general-purpose agent. It is **market infrastructure that creates the evidence the agent economy needs in order to spend**.
+The product is deliberately narrow: exactly three paid services, one SharedOS purpose string, bounded role-specific authority, replay-safe evidence, and a real SharedNet Room provider loop.
 
 ## The 30-second judge story
 
@@ -16,7 +14,7 @@ UNKNOWN SELLER
      │  Trust Snapshot — 4 credits
      ▼
 BOUNDED ACTIVE CANARY
-Router ──messages.request──> Probe ──exact one-use ticket──> Seller
+Router ──messages.request──> Probe ──exact one-use target authority──> Seller
      │
      ▼
 TRY_SMALL  [PROVISIONAL]
@@ -31,51 +29,81 @@ TASK-SPECIFIC VERIFIED REPUTATION
      ▼
 BEST EXECUTION — 10 credits
      │
-     └────────────── routes the next credit ──────────────┐
-                                                          │
-                         evidence compounds after every trade
+     └──────────── routes the next credit with stronger evidence
 ```
 
-Run the entire market transition locally:
-
-```bash
-python scripts/arena_demo.py
-```
-
-The demo visibly proves:
-
-```text
-UNPROVEN -> active canary -> TRY_SMALL -> verified deliveries -> BUY
-```
-
-and CI runs the same demo as a release gate.
+A canary never masquerades as task history. Protocol evidence and verified delivery evidence remain separate.
 
 ## Arena services
 
 | Service | Price | Why another agent buys it |
 |---|---:|---|
-| `counterparty.trust_snapshot` | **4 credits** | **Fresh proof before spend.** Counterparty can actively canary-test an unknown seller under bounded SharedOS authority, then returns `BUY / TRY_SMALL / CAUTION / UNPROVEN / AVOID` with evidence tier and audit receipt. |
-| `counterparty.verify_delivery` | **7 credits** | **Independent proof after spend.** Verify the immutable delivery under deterministic schema/assertion/manipulation checks; decisive verified results update task reputation exactly once. |
-| `counterparty.best_execution` | **10 credits** | **Where should I spend next?** Rank providers under a credit budget using VERIFIED task evidence first and explicitly discounted PROVISIONAL canary evidence when the market is new. |
+| `trust_snapshot` | **4 credits** | Fresh proof before spend. Returns `BUY / TRY_SMALL / CAUTION / UNPROVEN / AVOID`, evidence tier, confidence, protocol evidence, and audit receipt. |
+| `verify_delivery` | **7 credits** | Independent proof after spend. Returns `PASS / FAIL / INCONCLUSIVE`, evidence details, replay status, reputation-update status, and audit receipt. |
+| `best_execution` | **10 credits** | Ranks providers under a budget, preferring VERIFIED task evidence and explicitly discounting PROVISIONAL canary evidence. |
 
-The three products form one monetizable loop instead of three disconnected endpoints:
+The commercial loop is:
 
 **Trust Snapshot creates evidence → Best Execution routes a first spend → Verify Delivery strengthens evidence → stronger evidence drives the next Best Execution.**
 
-That is the Arena flywheel.
+## How another agent calls Counterparty on SharedNet
 
-## Why the cold-start fix is defensible
+Arena discovery is **Room-based**, not a global service registry, and calls are **messages**, not RPCs.
 
-Counterparty stores **two different evidence classes** and never conflates them:
+Counterparty joins the Arena Room with a public SharedNet Instance/seat (`i_...`). Other agents discover the seat in the Room roster or from the published seat ID, then send a request message such as:
 
-- **Protocol canary evidence** proves that the seller answered a current bounded challenge correctly, with the exact nonce, expected JSON contract, safe output markers, and measured latency. It produces a `PROVISIONAL` market signal only.
-- **Verified delivery evidence** proves the result of an actual buyer task under an immutable delivery ID, server-owned task contract, deterministic assertions, and independent checks. It produces the stronger `VERIFIED` task reputation.
+```json
+{
+  "type": "counterparty.service.request.v1",
+  "request_id": "buyer-generated-unique-id",
+  "service": "trust_snapshot",
+  "input": {
+    "service_id": "i_TargetSeat1"
+  }
+}
+```
 
-A canary can therefore unlock a small first purchase without pretending that a new seller already has a task history. After the purchase, `verify_delivery` is the upgrade path from `PROVISIONAL` to `VERIFIED`.
+The live provider loop uses the official SharedNet watcher contract:
 
-## SharedOS is the product boundary
+```bash
+sharednet watch --on message --run '<command>' --reply
+```
 
-The active proof flow depends on SharedOS authority separation:
+The watcher passes JSON on stdin as:
+
+```json
+{
+  "room_id": "rom_...",
+  "member_id": "i_...",
+  "trigger": "message",
+  "messages": []
+}
+```
+
+For a paid request, Counterparty returns the fixed price, payee address, and memo. The buyer pays through SharedNet and then includes the resulting `txn_...` ID in the request. Counterparty verifies the native ledger before running the paid SharedOS turn.
+
+Payment acceptance is deliberately strict. The ledger transfer must match:
+
+- transaction ID;
+- **the same SharedNet seat that sent the service request** (`by_instance_id`);
+- configured payee;
+- exact fixed service price;
+- current Room;
+- request ID and service in the memo.
+
+The transaction is then durably bound to one request/fingerprint. A buyer-authored “paid” message, copied transaction ID, or another buyer's visible Room receipt cannot authorize delivery.
+
+SharedNet address classes remain distinct:
+
+- `i_...` — live Instance/seat; this is what another agent calls.
+- `a_...` — Agent/tag address.
+- `p_...` — Principal/account address.
+
+SharedNet can route payments to supported address classes, but Counterparty never confuses payment identity with the exact seller seat used for an active canary.
+
+## SharedOS is load-bearing
+
+The active proof flow depends on explicit authority separation:
 
 ```text
 SharedNet buyer
@@ -83,33 +111,31 @@ SharedNet buyer
       ▼
 Counterparty Router
   product decision authority
-  trust/verify/best-execution tools
-  one recipient-scoped ticket to Counterparty Probe
-  NO seller-call authority
+  service tools
+  one bounded ticket to Counterparty Probe
+  NO direct seller-call authority
       │
-      │ messages.request
       ▼
 Counterparty Probe
-  one exact recipient-scoped seller ticket
+  exact target authority
   bounded maxUses
   NO reputation-write authority
   NO attestation authority
       │
-      │ messages.request
       ▼
-Target SharedNet service
+Target SharedNet seat
 ```
 
-The Router generates the canary nonce and asks only the Probe. The Probe is the only product role that can contact the target service. Its grant is recipient-scoped, so a ticket for seller A cannot be spent on seller B. The raw reply returns to the Router, then `counterparty.record_probe` deterministically validates and stores it under the same `trust_snapshot` capability. The buyer never authors the nonce, assertions, success count, trust score, or target reply.
-
-The wider role map remains:
+The actual SharedOS audit identities are fixed and path-safe:
 
 ```text
-Router       decision/product-service authority; no seller-call authority
-Probe        bounded recipient-scoped seller-call authority only
-Judge        sealed-evidence authority; no seller calls
-Attestor     receipt authority only; no seller calls
+counterparty-router
+counterparty-probe
+counterparty-judge
+counterparty-attestor
 ```
+
+They are not repository placeholders. These are the `Address.agentId` values used by the runtime and the identities judges should use when locating product turns in the audit trail.
 
 Purpose string:
 
@@ -117,182 +143,185 @@ Purpose string:
 counterparty.verify-and-route-sharednet-services
 ```
 
-The SharedOS integration is pinned to `@aicoo/sharedos@0.1.0-alpha.5`. CI contract-tests deny-by-default behavior, purpose isolation, atomic `maxUses`, path-safe identities, escalation, role separation, recipient-scoped `messages.request`, single-use seller tickets, and an executable Probe turn.
+The Router generates the canary nonce and asks only the Probe. Probe is the only role allowed to contact the target seller. For Arena transport, the target identifier is the seller's exact SharedNet `i_...` seat. Canary replies are accepted only from that seat.
 
-## What an agent receives
+## Evidence semantics
 
-A Trust Snapshot is designed to be immediately actionable, not an analyst report. It returns:
+Counterparty stores two evidence classes separately:
 
-- `verdict`: `BUY | TRY_SMALL | CAUTION | UNPROVEN | AVOID`
-- `action`: `BUY | BUY_SMALL_THEN_VERIFY | RUN_CANARY | SKIP`
-- `evidence_tier`: `VERIFIED | PROVISIONAL | UNPROVEN`
-- task reputation score, conservative score, confidence and observation count
-- separate protocol-canary successes/failures/latency/confidence
-- audit receipt
-- when called through the active SharedOS Router, `fresh_probe` metadata from that turn
+- **Protocol canary evidence** proves a seller answered a current bounded challenge correctly. It can create `PROVISIONAL` evidence and justify a small first purchase.
+- **Verified delivery evidence** proves an actual buyer delivery satisfied its trusted task contract. It produces the stronger `VERIFIED` task reputation.
 
-Best Execution also returns a machine-actionable `next_action`:
+Trust invariants:
 
-- if everybody is unknown: buy Trust Snapshot on candidate sellers so Counterparty can create the first evidence event;
-- after a provisional route: verify the purchased delivery so the market signal upgrades to task-specific evidence.
-
-Counterparty therefore does not merely say “I don't know.” It tells the buyer the cheapest evidence-producing action that turns uncertainty into a decision.
-
-## Trust invariants
-
-Counterparty remains deliberately fail-closed even after adding active probing.
-
-- **Missing evidence never becomes `PASS`.**
-- A returned canary is validated against a server-generated nonce and server-owned contract.
-- Buyers cannot choose canary assertions, submit their own trust score, or write successes/failures.
-- Protocol canaries and real delivery evidence are stored separately.
-- Safe Best Execution labels canary-only recommendations `PROVISIONAL`; it does not call them verified.
-- Only decisive, contract-bound real deliveries update task reputation.
-- Repeated canaries and repeated deliveries are audited but cannot increment reputation twice.
-- Verification/reputation/audit updates are transactional under `BEGIN IMMEDIATE`.
-- Application audit records form a SHA-256 chain; the SharedOS Cloud audit remains authoritative for the hackathon.
-- `/v1/*` is a private backend surface and fails closed without a >=32-character internal ingress token.
-- Request and output sizes are bounded.
-- Citation-looking strings are not proof; source checks must come from trusted independent evidence.
+- Missing evidence never becomes `PASS`.
+- A canary must match a server-generated nonce and server-owned schema/assertions.
+- Buyers cannot submit their own trust score or reputation counts.
+- Failed-canary majority becomes `REJECTED` and is not routeable in safe mode.
+- Repeated canaries and deliveries cannot increment reputation twice.
+- Verification/reputation/audit writes are transactional.
+- SharedOS authorization is deny-by-default and bounded grants use atomic `maxUses` consumption.
 - Escalation is separately granted and never silently widens authority.
+- The private FastAPI core is not the public SharedNet service surface.
+
+## Live Arena provider implementation
+
+The merged Arena release contains the real provider boundary, not only an API demo:
+
+- `sharedos/arena-service.ts` — paid SharedNet request → SharedOS Router turn orchestration.
+- `sharedos/sharednet-cli.ts` — SharedNet CLI transport, exact-sender canary polling, and ledger verification.
+- `sharedos/arena-store.ts` — durable SharedOS grant usage/audit plus replay-safe payment/request binding.
+- `sharedos/arena-service.test.ts` — service-loop/payment-boundary tests.
+- `sharedos/sharednet-cli.test.ts` — buyer-seat-bound ledger verification tests.
+- `scripts/arena_host.py` — cross-platform launcher for the private backend and SharedNet watcher.
+- `tests/test_arena_host.py` — locks the current supported SharedNet launcher syntax.
+- `docs/SHAREDNET_ARENA.md` — organizer-confirmed Room/message/payment model.
+
+Active canary polling uses sender-filtered SharedNet reads rather than consuming the provider watch cursor, so nested probing cannot steal unrelated Arena messages from the parent service loop.
 
 ## Engineering evidence
 
-The original release stress run processed:
+The release gates include:
 
-- **7,500 mixed API requests**
-- **128 concurrent requests**
-- **0 non-200 responses**
-- **~299 requests/sec**
-- **p95 ~1.04 s**
-- **p99 ~2.03 s**
-- **max ~5.29 s**
-- valid audit chain after the run
-- 100 concurrent replay attempts → **exactly one** reputation update
-
-These are local engineering measurements, not SharedOS Cloud throughput claims.
-
-The v0.3 CI release matrix adds the Arena flywheel itself as a gate:
-
-- Python 3.11
-- Python 3.12
-- Python 3.13
-- functional + adversarial + cold-start/flywheel tests
+- Python 3.11 / 3.12 / 3.13 tests
 - Ruff
 - Bandit
 - pip-audit
-- coverage >=90%
-- **Arena flywheel demo**
+- coverage >= 90%
+- Arena flywheel demo
 - concurrent stress + replay storm
-- SharedOS TypeScript typecheck + all contract suites
+- autonomous two-round Arena rehearsal
+- accelerated two-hour-equivalent restart soak
+- SharedOS TypeScript typecheck + contract suites
+- live Arena service-loop/payment-boundary tests
 - container build
 
-## One-command demo
+The hardened CI stress run executes **1,500 mixed requests at concurrency 48 with 0 HTTP failures**. The replay storm produces **exactly one reputation update**. The accelerated soak processes **2,400 events across a 7,200-second-equivalent workload with restart segments** while preserving the audit chain.
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
-python scripts/arena_demo.py
-```
+These are local engineering measurements, not SharedOS Cloud throughput claims.
 
-Machine-readable form:
+Run the deterministic market demo:
 
 ```bash
 python scripts/arena_demo.py --json
 ```
 
-The demo starts with two unknown sellers, passes a bounded canary for one, intentionally fails the other's nonce, routes the first safe spend to the passing seller, verifies paid deliveries, then shows the winner promoted from `TRY_SMALL [PROVISIONAL]` to `BUY [VERIFIED]` while the audit chain stays valid.
-
-## Run the private core
+## Run the private core locally
 
 ```bash
 export COUNTERPARTY_INTERNAL_TOKEN='replace-with-a-cryptographically-random-secret'
-pytest
-uvicorn counterparty.app:app --host 127.0.0.1 --port 8000
+python -m uvicorn counterparty.app:app --host 127.0.0.1 --port 8000
 ```
 
-Public liveness/card endpoints:
-
-```text
-GET /health
-GET /.well-known/agent.json
-```
-
-Trusted SharedOS-host backend endpoints:
+Trusted backend endpoints:
 
 ```text
 POST /v1/trust-snapshot
-POST /v1/probe-observation     # internal active-canary record step
+POST /v1/probe-observation
 POST /v1/verify-delivery
 POST /v1/best-execution
 GET  /v1/audit
 GET  /v1/audit/{receipt}
 ```
 
-Direct development requests to `/v1/*` must send:
+Direct development requests to `/v1/*` require:
 
 ```text
 X-Counterparty-Internal-Token: $COUNTERPARTY_INTERNAL_TOKEN
 ```
 
+## Arena launch
+
+The organizer's QA Room is for connectivity testing. The competition Room is supplied separately near Arena start and must not be hard-coded.
+
+From a SharedNet-authenticated checkout after joining the current Room:
+
+```bash
+python scripts/arena_host.py
+```
+
+The launcher verifies the selected account/seat, sets the real seat/node environment, makes the seat public with the currently supported `sharednet reach public` syntax, starts the private backend, and runs the official watcher loop. For bounded QA testing only:
+
+```bash
+python scripts/arena_host.py --max-runs 5
+```
+
+Exact operational details live in:
+
+```text
+docs/SHAREDNET_ARENA.md
+docs/ARENA_RUNBOOK.md
+docs/SUBMISSION_CHECKLIST.md
+```
+
 ## Live Arena preflight
 
-Code readiness is not enough for Shared OS eligibility, so v0.3 includes a fail-closed deployment gate:
+Code readiness is not enough for hackathon eligibility:
 
 ```bash
 python scripts/arena_preflight.py --live
 ```
 
-It refuses `READY=true` unless all of these exist and agree:
+The current preflight refuses `READY=true` unless these real deployment facts exist:
 
-- private internal token
-- SharedOS tenant ID
-- SharedOS owner address
-- personal agent SharedNet node ID
-- non-placeholder Router / Probe / Judge / Attestor production addresses
-- HTTPS public deployment URL
-- live `/health` reporting v0.3.0
-- live agent card with the exact Counterparty purpose string and production addresses
+- private internal backend token;
+- representative agent's real SharedNet `i_...` node/seat ID;
+- real SharedNet payee address;
+- canonical SharedOS role identities exactly matching the runtime;
+- explicit confirmation that real Counterparty turns are visible in SharedOS Cloud audit;
+- explicit confirmation that another SharedNet seat called Counterparty and received a reply.
 
-This is intentionally strict. Source code cannot manufacture organizer-issued tenant/node IDs or a SharedOS Cloud audit trail; once those event credentials are provisioned, the preflight turns live completeness into a machine-verifiable release condition.
+A public HTTPS URL is **optional** because SharedNet invocation is message-based. When configured, preflight validates it strictly, including `/health`, `/.well-known/agent.json`, the exact purpose string, and canonical role identities.
+
+A SharedOS tenant ID or separately invented “production” role ID is **not** a Counterparty preflight requirement. Current SharedOS documentation says the application runs the kernel and Cloud separately receives decision events the application sends. This does **not** remove the hackathon requirement that judges be able to find real Counterparty turns in the SharedOS Cloud audit trail.
 
 ## Arena autonomous loop
 
-**Round 1 — create the market data**
+**Round 1 — create the first market data**
 
-1. Discover unfamiliar services.
-2. Buy Trust Snapshot on candidates; each authorized call can actively create fresh protocol evidence.
-3. Use `explore` when the market is still empty.
-4. Try other products as required by the event and verify deterministic deliveries.
-5. Build the first task-specific reputation graph before the market round.
+1. Join the Arena Room and read its roster.
+2. Try at least three other products with concrete tasks.
+3. Record one specific disagreement/critique for each product tried.
+4. Use Trust Snapshot on relevant unfamiliar sellers so cold-start evidence exists before Round 2.
+5. Submit the required ranking.
 
 **Round 2 — monetize the graph**
 
-1. Other agents buy Trust Snapshot before risking larger spends.
-2. Safe Best Execution can route a first small purchase from canary evidence instead of deadlocking on zero history.
-3. Buyers purchase the recommended provider.
-4. Verify Delivery turns that trade into stronger task evidence.
-5. The next Best Execution is better because the previous trade happened.
+1. Keep Counterparty's public seat online and responsive.
+2. Offer the 4-credit Trust Snapshot as the low-friction pre-spend purchase.
+3. Use Safe Best Execution to route small initial spends from provisional evidence.
+4. Verify real deliveries so sellers can graduate to VERIFIED evidence.
+5. Spend the event-required Arena credits across the required number of other products with the representative personal agent.
 
-Every transaction can make the next transaction easier to price. That is why Counterparty is positioned as **the trust and best-execution layer for the agent economy**, not as a one-off verifier.
-
-## Repository guide
-
-- `counterparty/` — deterministic verification, dual-layer reputation, routing, durable SQLite evidence, API.
-- `sharedos/` — SharedOS host, role drivers, recipient-scoped message grants, SDK contract tests.
-- `tests/test_flywheel.py` — cold-start → provisional → verified market transition.
-- `scripts/arena_demo.py` — one-command judge demo.
-- `scripts/arena_preflight.py` — fail-closed real deployment gate.
-- `scripts/stress_test.py` — concurrent mixed load + replay storm.
-- `docs/ARCHITECTURE.md` — evidence/authority architecture.
-- `docs/THREAT_MODEL.md` — hostile Arena assumptions and controls.
-- `docs/ARENA_RUNBOOK.md` — no-human-in-the-loop operating plan.
-- `docs/SUBMISSION_CHECKLIST.md` — event eligibility and owner-supplied deployment fields.
+The representative agent must operate without a human in the loop during the Arena.
 
 ## Release boundary
 
-The **product implementation and cold-start market flywheel are in this repository**. Hackathon eligibility still requires the organizer-provisioned SharedOS Cloud tenant/owner data, real product turns in the Cloud audit, final SharedNet node/service registration, and production addresses. `scripts/arena_preflight.py --live` is the stop/go gate for that final external step.
+The **product implementation, SharedOS authority model, buyer-seat-bound payment boundary, SharedNet provider loop, cold-start flywheel, and hardening tests are complete in this repository**.
+
+The four product-agent audit identities are already fixed and submission-ready. The remaining eligibility facts are external and must be real, not fabricated:
+
+- authenticated SharedNet account and live `i_...` seat/node;
+- real payee address;
+- competition Room membership;
+- real Counterparty product turns visible in SharedOS Cloud audit;
+- one external SharedNet purchase/call proving another seat can receive a Counterparty service;
+- real node/seat ID and team-lead Discord username in the final submission.
+
+`python scripts/arena_preflight.py --live` is the final stop/go gate.
+
+## Repository guide
+
+- `counterparty/` — deterministic verification, dual-layer reputation, routing, durable SQLite evidence, private API.
+- `sharedos/` — SharedOS host, role drivers, bounded grants, SharedNet Arena service loop, durable authority/audit state.
+- `scripts/arena_demo.py` — market-transition demo.
+- `scripts/arena_rehearsal.py` — autonomous two-round rehearsal.
+- `scripts/arena_soak.py` — restart/soak hardening.
+- `scripts/arena_preflight.py` — fail-closed live deployment gate.
+- `scripts/arena_host.py` — Arena host launcher.
+- `docs/SHAREDNET_ARENA.md` — SharedNet Arena transport/payment contract.
+- `docs/ARENA_RUNBOOK.md` — no-human-in-the-loop operating plan.
+- `docs/SUBMISSION_CHECKLIST.md` — final eligibility checklist.
 
 ## License
 

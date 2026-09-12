@@ -1,22 +1,22 @@
 # SharedOS integration — Counterparty v0.3
 
-This directory is the authoritative Arena product boundary. The Python service is intentionally private behind it.
+This directory is Counterparty's authoritative Arena product boundary. The Python/FastAPI service remains private behind it; SharedNet carries market messages, and SharedOS decides which Counterparty role may do what for each turn.
 
 ## Load-bearing authority model
 
-1. `resolveContext` derives actor/authority/owner/purpose from authenticated server-side state. No request body carries authority.
+1. `resolveContext` derives actor, authority, owner, purpose, and namespace from trusted host state. Request bodies do not carry authority.
 2. Tools are invisible without matching grants and are re-authorized on the exact invocation.
-3. Bounded grants use a durable atomic `GrantUsageStore`; a missing usage store fails closed.
-4. The Router owns product-service decisions but **never** receives seller-call authority.
-5. Active Trust Snapshot gives the Router one recipient-scoped `messages.request` ticket to the Counterparty Probe.
-6. The Probe receives its own execution grant plus one exact recipient-scoped seller ticket. A ticket for service A cannot be spent on service B.
-7. The Probe returns only raw observed output; it cannot write reputation or attestations.
-8. `counterparty.record_probe` is available only under the Router's exact `trust_snapshot` service capability and deterministically validates the host-generated nonce before protocol evidence is stored.
-9. Protocol-canary evidence is separate from task-delivery evidence. It may unlock a `PROVISIONAL` routing decision but cannot masquerade as verified task history.
-10. `verify_delivery` accepts only an immutable `delivery_id`; provider/output/task contract come from `TrustedDeliveryResolver` backed by host-owned state.
+3. Bounded grants use a durable atomic `GrantUsageStore`; missing durable usage state fails closed.
+4. The Router owns product-service decisions but never receives direct seller-call authority.
+5. Active Trust Snapshot gives the Router one recipient-scoped `messages.request` ticket to Counterparty Probe.
+6. Probe receives its own execution grant plus one exact recipient-scoped seller ticket; a ticket for seller A cannot be spent on seller B.
+7. Probe returns raw observed output only; it cannot write reputation or attestations.
+8. `counterparty.record_probe` is available only under the Router's exact `trust_snapshot` capability and deterministically validates the host-generated nonce before protocol evidence is stored.
+9. Protocol-canary evidence and task-delivery evidence are stored separately. Canary evidence may unlock `PROVISIONAL` routing but cannot masquerade as verified task history.
+10. `verify_delivery` accepts only an immutable delivery ID; provider/output/task contract come from `TrustedDeliveryResolver` backed by host-owned state.
 11. Missing evidence produces `INCONCLUSIVE`, never an optimistic pass.
-12. Escalation is separately granted and never widens the current turn's authority.
-13. The Python backend requires a private internal token; it is not the SharedNet surface.
+12. Escalation is separately granted and never silently widens the current turn's authority.
+13. The Python backend requires a private internal token and is not the public SharedNet surface.
 
 ## Purpose
 
@@ -29,52 +29,67 @@ This directory is the authoritative Arena product boundary. The Python service i
 - `counterparty-judge`
 - `counterparty-attestor`
 
-These IDs are deliberately path-segment-safe. SharedOS execution capabilities encode an agent address into a resource path, so `/` must not appear inside an agent ID.
+These IDs are deliberately path-segment-safe because SharedOS execution capabilities encode agent addresses into resource paths.
 
 ## Active Trust Snapshot turn
 
 ```text
-buyer -> Router
-          |
-          | messages.request
-          | grant: Router -> Counterparty Probe, maxUses=1
-          v
-        Probe
-          |
-          | messages.request
-          | grant: Probe -> exact target service, maxUses=1
-          v
-        seller
-          |
-          v
-    raw canary reply
-          |
-          v
+SharedNet buyer message
+        |
+        v
+Counterparty Router
+        |
+        | messages.request
+        | Router -> Probe, maxUses=1
+        v
+Counterparty Probe
+        |
+        | messages.request
+        | Probe -> exact target seat, maxUses=1
+        v
+Target SharedNet seller
+        |
+        v
+raw canary reply from exact target
+        |
+        v
 Router -> counterparty.record_probe -> refreshed trust_snapshot
 ```
 
-The seller receives a server-generated capability canary containing a nonce and expected response contract. The Probe never decides whether it passed; the backend validates the raw reply. This keeps the network authority decision, the evidence observation, and the trust decision as separate concerns.
+The seller receives a server-generated capability canary containing a nonce and expected response contract. Probe never decides whether it passed; the deterministic backend validates the raw reply. Network authority, evidence observation, and trust judgment stay separate.
 
 ## Required host ports
 
-`createCounterpartySharedOSHost` now requires both canonical message ports:
+`createCounterpartySharedOSHost` requires the canonical message ports:
 
 - `MessageTransport`
 - `MessageRequestRouter`
 
-When those ports are configured, SharedOS adds the canonical `messages.request` affordance to the effective tool catalog. Visibility still depends on the `messages` namespace and a recipient-scoped `sharedos.messaging/send` grant.
+With those ports configured, SharedOS exposes the canonical `messages.request` affordance. Visibility still depends on the `messages` namespace plus recipient-scoped `sharedos.messaging/send` authority.
 
 ## Production grants for one active snapshot
 
-At minimum, one active Trust Snapshot purchase needs fresh bounded grants for:
+One active Trust Snapshot purchase needs fresh bounded authority for:
 
 - Router execution (`agentExecutionCapability(counterparty-router)`)
 - Router product service (`counterparty/services/trust_snapshot`)
 - Router -> Probe message (`messageSendCapability(counterparty-probe)`, `maxUses=1`)
 - Probe execution (`agentExecutionCapability(counterparty-probe)`)
-- Probe -> exact seller service (`messageSendCapability(target-service)`, `maxUses=1`)
+- Probe -> exact seller seat/service (`messageSendCapability(target)`, `maxUses=1`)
 
-The Router's service grant has no seller recipient in it. The Probe's seller grant has no reputation-write resource in it.
+The Router service grant contains no seller recipient. Probe's seller grant contains no reputation-write resource.
+
+## Live Arena service boundary
+
+The repository now includes runnable production wiring around the tested SharedOS host:
+
+- `arena-service.ts` parses Counterparty's SharedNet service envelope, verifies payment, mints request-scoped bounded grants, runs the Router turn, and caches successful replies idempotently.
+- `sharednet-cli.ts` adapts the official SharedNet CLI message/ledger/read contract. Active canary replies are accepted only from the exact target `i_...` seat.
+- `arena-store.ts` supplies durable SQLite grant usage, audit state, payment/request binding, and trusted delivery records.
+- `arena-service.test.ts` exercises the SharedNet message/payment boundary and nested Router/Probe behavior.
+- `../scripts/arena_host.py` launches the private backend and official SharedNet watcher loop from an authenticated Arena machine.
+
+SharedNet Room discovery and payment semantics are documented in `../docs/SHAREDNET_ARENA.md`.
 
 ## Contract tests
 
@@ -88,21 +103,29 @@ The suite proves:
 - deny-by-default discovery
 - purpose isolation
 - atomic `maxUses`
-- a bounded real Router turn
+- bounded Router execution
 - Router / Probe / Judge / Attestor authority separation
-- low-level target grant exhaustion
 - separately granted escalation
 - immutable-delivery evidence stripping
-- Router can message the Probe but cannot spend that ticket on a seller
+- Router can message Probe but cannot spend that ticket on a seller
 - Probe seller tickets are exact-recipient and single-use
-- an executable Probe turn performs a real canonical `messages.request` canary
+- executable Probe turns perform canonical `messages.request` canaries
+- Arena message parsing and payment verification fail closed
+- paid requests execute through SharedOS rather than bypassing it
 
 The package pins `@aicoo/sharedos@0.1.0-alpha.5` exactly because SharedOS is a prerelease surface.
 
-## Deployment wiring still required
+## What remains external to source control
 
-The event deployment must supply durable grant/usage/audit stores, authenticated `resolveContext`, `MessageTransport`, `MessageRequestRouter`, final Cloud/SharedNet addresses, and the `TrustedDeliveryResolver` that binds delivery IDs to immutable SharedNet execution records.
+The event still requires deployment facts that cannot be safely fabricated in the repository:
 
-Those are deployment facts, not safe defaults to fake in source control. `scripts/arena_preflight.py --live` is the fail-closed gate once organizer-issued tenant/node/address data is available.
+- an authenticated SharedNet account and real live seat/node ID;
+- a real SharedNet payee address;
+- membership in the QA/competition Room as applicable;
+- final product-agent addresses used for the event;
+- real Counterparty turns visible in the SharedOS Cloud audit trail;
+- at least one external SharedNet seat successfully calling Counterparty.
 
-The SharedOS Cloud audit is the hackathon's authoritative audit trail. Counterparty's application hash-chain is complementary evidence, not a replacement.
+The current organizer guidance does **not** require Counterparty to wait for a separately issued SharedOS tenant ID or owner-address environment variable. The application runs the kernel; Cloud provides the event-visible audit trail. This changes the provisioning path, not the hackathon requirement that judges be able to find real product turns in SharedOS Cloud.
+
+`scripts/arena_preflight.py --live` is the fail-closed stop/go gate for those real deployment facts. Counterparty's application hash-chain and local durable SharedOS audit are complementary evidence; they are not presented as a substitute for the event's Cloud audit trail.

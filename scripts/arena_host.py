@@ -21,6 +21,16 @@ def command(name: str) -> str:
     return name
 
 
+def sharednet_reach_args(npx: str) -> list[str]:
+    """Build the current SharedNet reach command.
+
+    `reach` does not accept `--as`. The launcher sets SHAREDNET_SEAT before
+    invoking it, so the CLI selects the exact Arena seat from trusted process
+    environment instead of an unsupported command-line option.
+    """
+    return [npx, "-y", "sharednet@latest", "reach", "public", "--json"]
+
+
 def run_json(args: list[str], env: dict[str, str]) -> dict:
     completed = subprocess.run(
         args,
@@ -105,9 +115,11 @@ def main() -> int:
     backend_url = f"http://127.0.0.1:{args.backend_port}"
     env["COUNTERPARTY_BACKEND_URL"] = backend_url
 
-    # An Arena product must be addressable by other Room participants.
+    # An Arena product must be addressable by other Room participants. The
+    # current SharedNet `reach` verb selects the seat via SHAREDNET_SEAT and
+    # intentionally has no --as option.
     subprocess.run(
-        [npx, "-y", "sharednet@latest", "reach", "public", "--as", member_id, "--json"],
+        sharednet_reach_args(npx),
         cwd=ROOT,
         env=env,
         check=True,

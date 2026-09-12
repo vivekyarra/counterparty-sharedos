@@ -247,6 +247,7 @@ async function processRequest(
   try {
     paid = await world.cli.verifyPayment({
       txnId: request.payment_txn_id,
+      payerSeat: parsed.senderSeat,
       payee: world.payee,
       amount: PRICES[request.service],
       requestId: request.request_id,
@@ -265,7 +266,7 @@ async function processRequest(
       type: "counterparty.service.response.v1",
       ...responseBase(request),
       state: "PAYMENT_NOT_VERIFIED",
-      reason: "No matching room-visible ledger transfer was found for this request, price and payee",
+      reason: "No matching room-visible ledger transfer was found from this requesting seat for this request, price and payee",
       expected_payee: world.payee,
     };
   }
