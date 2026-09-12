@@ -76,6 +76,29 @@ class DeliveryVerificationRequest(StrictModel):
         return value
 
 
+class ProbeObservationRequest(StrictModel):
+    """Host-owned result of one bounded SharedOS capability canary.
+
+    This is not a buyer-authored task contract. The Router generates the nonce,
+    the Probe is the only role allowed to contact the target service, and the
+    SharedOS host forwards the raw reply here for deterministic validation.
+    """
+
+    probe_id: str = Field(min_length=1, max_length=200)
+    provider_id: str = Field(min_length=1, max_length=200)
+    nonce: str = Field(min_length=8, max_length=200)
+    output: Any
+    latency_ms: int = Field(ge=0, le=300_000)
+
+    @field_validator("output")
+    @classmethod
+    def output_must_be_bounded(cls, value: Any) -> Any:
+        rendered = repr(value)
+        if len(rendered) > MAX_OUTPUT_CHARS:
+            raise ValueError(f"output exceeds {MAX_OUTPUT_CHARS} characters")
+        return value
+
+
 class CandidateRequest(StrictModel):
     service_id: str = Field(min_length=1, max_length=200)
     price_credits: int = Field(ge=0, le=100)
@@ -91,6 +114,8 @@ class CandidateScore(StrictModel):
     task_fit: float = Field(ge=0, le=1)
     latency_ms: int = Field(ge=0)
     observations: int = Field(ge=0)
+    protocol_observations: int = Field(default=0, ge=0)
+    evidence_tier: Literal["VERIFIED", "PROVISIONAL", "UNPROVEN"] = "UNPROVEN"
 
 
 class BestExecutionRequest(StrictModel):
