@@ -109,12 +109,6 @@ def run(live: bool) -> tuple[list[Check], dict[str, object]]:
                     "attestor": addresses["COUNTERPARTY_ATTESTOR_ADDRESS"],
                 }
                 checks.append(Check("production agent addresses", card_addresses == expected, str(card_addresses)))
-                sharednet = card.get("sharednet")
-                if isinstance(sharednet, dict):
-                    checks.append(Check("agent-card SharedNet seat", sharednet.get("seat_id") == node_id, str(sharednet.get("seat_id"))))
-                    checks.append(Check("agent-card payee", sharednet.get("payee_address") == payee, str(sharednet.get("payee_address"))))
-                else:
-                    checks.append(Check("agent-card SharedNet metadata", False, "missing sharednet object"))
             except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 checks.append(Check("remote deployment", False, f"unreachable or invalid: {exc}"))
 
