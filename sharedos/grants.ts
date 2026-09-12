@@ -1,5 +1,6 @@
 import {
   agentExecutionCapability,
+  messageSendCapability,
   type Address,
   type CapabilityGrant,
 } from "@aicoo/sharedos";
@@ -45,6 +46,24 @@ export function routerExecutionGrant(
   };
 }
 
+/** Execute exactly the Probe seat; seller-contact authority remains a separate grant. */
+export function probeExecutionGrant(
+  owner: Address,
+  namespaceId: string,
+  id: string,
+  maxUses = 1,
+): CapabilityGrant {
+  return {
+    id,
+    namespaceId,
+    subject: COUNTERPARTY_PROBE,
+    issuer: owner,
+    capabilities: [agentExecutionCapability(COUNTERPARTY_PROBE, owner)],
+    constraints: { purposes: [COUNTERPARTY_PURPOSE], maxUses },
+    issuedAt: new Date().toISOString(),
+  };
+}
+
 /** Router product-internal authority. It gets no target-service invocation authority. */
 export function routerServiceGrant(
   owner: Address,
@@ -72,7 +91,52 @@ export function routerServiceGrant(
   };
 }
 
-/** Probe authority is exact-target and bounded. It cannot write evidence or attestations. */
+/** Router may ask exactly the Counterparty Probe for one active Trust Snapshot. */
+export function routerProbeMessageGrant(
+  owner: Address,
+  namespaceId: string,
+  id: string,
+  maxUses = 1,
+): CapabilityGrant {
+  return {
+    id,
+    namespaceId,
+    subject: COUNTERPARTY_ROUTER,
+    issuer: owner,
+    capabilities: [messageSendCapability(COUNTERPARTY_PROBE, owner)],
+    constraints: { purposes: [COUNTERPARTY_PURPOSE], maxUses },
+    issuedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Canonical production seller-contact grant. `messages.request` resolves the
+ * requirement to this exact service recipient, so a ticket for target A cannot
+ * be spent on target B and the Router never receives this authority.
+ */
+export function probeMessageGrant(
+  owner: Address,
+  namespaceId: string,
+  targetServiceKey: string,
+  maxUses = 1,
+): CapabilityGrant {
+  const target = { kind: "service", serviceId: targetServiceKey } as const;
+  return {
+    id: `grant-probe-message-${targetServiceKey}`,
+    namespaceId,
+    subject: COUNTERPARTY_PROBE,
+    issuer: owner,
+    capabilities: [messageSendCapability(target, owner)],
+    constraints: { purposes: [COUNTERPARTY_PURPOSE], maxUses },
+    issuedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Exact low-level target authority retained for direct/native adapters and the
+ * isolation contract test. SharedNet Arena probing uses `probeMessageGrant` and
+ * the canonical `messages.request` tool above.
+ */
 export function probeTargetGrant(
   owner: Address,
   namespaceId: string,
