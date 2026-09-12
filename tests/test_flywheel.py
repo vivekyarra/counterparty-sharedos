@@ -119,7 +119,25 @@ def test_probe_replay_is_suppressed_and_wrong_nonce_is_a_failure(tmp_path):
     assert bad["state"] == "FAIL"
     snapshot = c.post("/v1/trust-snapshot", json={"service_id": "seller-b"}).json()
     assert snapshot["verdict"] == "AVOID"
+    assert snapshot["evidence_tier"] == "REJECTED"
     assert snapshot["protocol_evidence"]["failures"] == 1
+
+    routed = c.post(
+        "/v1/best-execution",
+        json={
+            "task": "do a bounded task",
+            "budget_credits": 20,
+            "mode": "safe",
+            "candidates": [
+                {"service_id": "seller-b", "price_credits": 1, "task_fit": 1.0},
+                {"service_id": "unknown-c", "price_credits": 8, "task_fit": 0.7},
+            ],
+        },
+    ).json()
+    assert routed["state"] == "INCONCLUSIVE"
+    rejected = next(row for row in routed["ranked"] if row["service_id"] == "seller-b")
+    assert rejected["evidence_tier"] == "REJECTED"
+    assert routed["next_action"]["targets"] == ["unknown-c"]
 
 
 def test_verified_deliveries_upgrade_provisional_signal_to_buy(tmp_path):
