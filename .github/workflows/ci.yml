@@ -48,6 +48,19 @@ jobs:
       - run: coverage run -m pytest
       - run: coverage report --fail-under=90
 
+  arena-demo:
+    name: Arena flywheel demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: python scripts/arena_demo.py --json
+
   stress:
     name: Concurrent stress + replay storm
     runs-on: ubuntu-latest
