@@ -115,7 +115,7 @@ class CandidateScore(StrictModel):
     latency_ms: int = Field(ge=0)
     observations: int = Field(ge=0)
     protocol_observations: int = Field(default=0, ge=0)
-    evidence_tier: Literal["VERIFIED", "PROVISIONAL", "UNPROVEN"] = "UNPROVEN"
+    evidence_tier: Literal["VERIFIED", "PROVISIONAL", "REJECTED", "UNPROVEN"] = "UNPROVEN"
 
 
 class BestExecutionRequest(StrictModel):
