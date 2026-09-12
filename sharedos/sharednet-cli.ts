@@ -26,12 +26,13 @@ interface SharedNetPage {
   readonly has_more?: boolean;
 }
 
-interface LedgerItem {
+export interface LedgerItem {
   readonly id?: string;
   readonly amount?: number;
   readonly memo?: string | null;
   readonly room_id?: string | null;
   readonly addressed_to?: string | null;
+  readonly by_instance_id?: string | null;
   readonly [key: string]: unknown;
 }
 
@@ -65,6 +66,28 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       { once: true },
     );
   });
+}
+
+export function ledgerPaymentMatches(
+  item: LedgerItem | undefined,
+  expected: {
+    readonly txnId: string;
+    readonly payerSeat: string;
+    readonly payee: string;
+    readonly amount: number;
+    readonly roomId: string;
+    readonly requestId: string;
+    readonly service: string;
+  },
+): boolean {
+  if (item === undefined) return false;
+  if (item.id !== expected.txnId) return false;
+  if (item.amount !== expected.amount) return false;
+  if (item.addressed_to !== expected.payee) return false;
+  if (item.room_id !== expected.roomId) return false;
+  if (item.by_instance_id !== expected.payerSeat) return false;
+  const memo = typeof item.memo === "string" ? item.memo : "";
+  return memo.includes(expected.requestId) && memo.includes(expected.service);
 }
 
 export class SharedNetCli {
@@ -132,24 +155,29 @@ export class SharedNetCli {
 
   async verifyPayment(input: {
     txnId: string;
+    payerSeat: string;
     payee: string;
     amount: number;
     requestId: string;
     service: string;
   }, signal?: AbortSignal): Promise<boolean> {
     if (!SHAREDNET_TXN_PATTERN.test(input.txnId)) return false;
+    if (!SHAREDNET_SEAT_PATTERN.test(input.payerSeat)) return false;
     if (!SHAREDNET_ADDRESS_PATTERN.test(input.payee)) return false;
     const page = (await this.#run(
       ["ledger", "--last", "100", "--as", this.#seatId],
       signal,
     )) as LedgerPage;
     const item = page.items?.find((candidate) => candidate.id === input.txnId);
-    if (item === undefined) return false;
-    if (item.amount !== input.amount) return false;
-    if (item.addressed_to !== input.payee) return false;
-    if (item.room_id !== this.#roomId) return false;
-    const memo = typeof item.memo === "string" ? item.memo : "";
-    return memo.includes(input.requestId) && memo.includes(input.service);
+    return ledgerPaymentMatches(item, {
+      txnId: input.txnId,
+      payerSeat: input.payerSeat,
+      payee: input.payee,
+      amount: input.amount,
+      roomId: this.#roomId,
+      requestId: input.requestId,
+      service: input.service,
+    });
   }
 
   async sendCanary(
